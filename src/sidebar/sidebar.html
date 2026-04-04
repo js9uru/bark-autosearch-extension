@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Search Extractor</title>
+  <script type="module" crossorigin src="/sidebar.js"></script>
+  <link rel="stylesheet" crossorigin href="/sidebar.css">
+</head>
+
+<body>
+  <div class="container">
+    <!-- Navigation Tabs -->
+    <div class="nav-tabs">
+      <button class="nav-tab active" data-page="search">Search</button>
+      <button class="nav-tab" data-page="settings">Settings</button>
+      <button class="nav-tab" data-page="help">Help</button>
+    </div>
+
+    <!-- Search Page -->
+    <div id="search-page" class="page active">
+      <div class="form-section">
+        <div class="form-group">
+          <button id="applyBarkData" class="btn" style="width: 100%; background-color: #6c757d; color: white;">
+            Apply Data from Bark
+          </button>
+        </div>
+
+        <div class="form-group">
+          <label for="firstname">First Name:</label>
+          <input type="text" id="firstname" placeholder="e.g., John">
+        </div>
+
+        <div class="form-group">
+          <label for="emailPattern">Email Pattern:</label>
+          <input type="text" id="emailPattern" placeholder="e.g., @example.com">
+        </div>
+
+        <div class="form-group">
+          <label for="city">City:</label>
+          <input type="text" id="city" placeholder="e.g., New York">
+        </div>
+
+        <div class="form-group">
+          <label for="state">State:</label>
+          <select id="state" class="searchable-select" placeholder="e.g., NY">
+            <option value="">Select a state...</option>
+            <option value="alabama">AL - Alabama</option>
+            <option value="alaska">AK - Alaska</option>
+            <option value="arizona">AZ - Arizona</option>
+            <option value="arkansas">AR - Arkansas</option>
+            <option value="california">CA - California</option>
+            <option value="colorado">CO - Colorado</option>
+            <option value="connecticut">CT - Connecticut</option>
+            <option value="delaware">DE - Delaware</option>
+            <option value="florida">FL - Florida</option>
+            <option value="georgia">GA - Georgia</option>
+            <option value="hawaii">HI - Hawaii</option>
+            <option value="idaho">ID - Idaho</option>
+            <option value="illinois">IL - Illinois</option>
+            <option value="indiana">IN - Indiana</option>
+            <option value="iowa">IA - Iowa</option>
+            <option value="kansas">KS - Kansas</option>
+            <option value="kentucky">KY - Kentucky</option>
+            <option value="louisiana">LA - Louisiana</option>
+            <option value="maine">ME - Maine</option>
+            <option value="maryland">MD - Maryland</option>
+            <option value="massachusetts">MA - Massachusetts</option>
+            <option value="michigan">MI - Michigan</option>
+            <option value="minnesota">MN - Minnesota</option>
+            <option value="mississippi">MS - Mississippi</option>
+            <option value="missouri">MO - Missouri</option>
+            <option value="montana">MT - Montana</option>
+            <option value="nebraska">NE - Nebraska</option>
+            <option value="nevada">NV - Nevada</option>
+            <option value="new-hampshire">NH - New Hampshire</option>
+            <option value="new-jersey">NJ - New Jersey</option>
+            <option value="new-mexico">NM - New Mexico</option>
+            <option value="new-york">NY - New York</option>
+            <option value="north-carolina">NC - North Carolina</option>
+            <option value="north-dakota">ND - North Dakota</option>
+            <option value="ohio">OH - Ohio</option>
+            <option value="oklahoma">OK - Oklahoma</option>
+            <option value="oregon">OR - Oregon</option>
+            <option value="pennsylvania">PA - Pennsylvania</option>
+            <option value="rhode-island">RI - Rhode Island</option>
+            <option value="south-carolina">SC - South Carolina</option>
+            <option value="south-dakota">SD - South Dakota</option>
+            <option value="tennessee">TN - Tennessee</option>
+            <option value="texas">TX - Texas</option>
+            <option value="utah">UT - Utah</option>
+            <option value="vermont">VT - Vermont</option>
+            <option value="virginia">VA - Virginia</option>
+            <option value="washington">WA - Washington</option>
+            <option value="west-virginia">WV - West Virginia</option>
+            <option value="wisconsin">WI - Wisconsin</option>
+            <option value="wyoming">WY - Wyoming</option>
+          </select>
+        </div>
+        <div class="extract-buttons-group">
+          <div style="white-space: nowrap; width: 100%;">
+            <button id="extractGoogle" class="btn btn-danger" style="width: 100%;">Google</button>
+            <button id="stopGoogle" class="btn btn-danger" style="display: none; width: 100%;">Stop Google</button>
+          </div>
+          <div style="white-space: nowrap; width: 100%;">
+            <button id="extractContact" class="btn btn-success" style="width: 100%;">CO</button>
+            <button id="stopContact" class="btn btn-danger" style="display: none; width: 100%;">Stop CO</button>
+          </div>
+          <button id="extractFast" class="btn btn-primary">FPS</button>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <h3>Extracted Names</h3>
+        <textarea id="nameList" rows="10" placeholder="Names will appear here..."></textarea>
+
+        <div style="display: flex; gap: 8px;">
+          <button id="searchBtn" class="btn btn-success" style="flex: 1;">Search & Process</button>
+          <button id="stopSearch" class="btn btn-danger" style="flex: 1; display: none;">Stop Search</button>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <h3>Results</h3>
+        <div id="status" class="status"></div>
+        <div id="results" class="results"></div>
+      </div>
+    </div>
+
+    <!-- Settings Page -->
+    <div id="settings-page" class="page">
+      <div class="form-section">
+        <h2>Settings</h2>
+
+        <div class="form-group">
+          <label for="apiKey">OpenAI API Key:</label>
+          <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off">
+          <small class="form-hint">Your API key is stored locally in your browser and never shared.</small>
+        </div>
+
+        <div class="form-group">
+          <button id="saveApiKey" class="btn btn-primary">Save API Key</button>
+          <button id="toggleApiKeyVisibility" class="btn"
+            style="margin-top: 8px; background-color: #6c757d; color: white;">
+            Show / Hide API Key
+          </button>
+        </div>
+
+        <div id="apiKeyStatus" class="status" style="display: none;"></div>
+      </div>
+    </div>
+
+    <!-- Help Page -->
+    <div id="help-page" class="page">
+      <div class="form-section">
+        <h2>Help</h2>
+
+        <div class="help-section">
+          <h3>Getting Started</h3>
+          <p>This extension helps you extract and process names from search results and find matching email addresses.
+          </p>
+        </div>
+
+        <div class="help-section">
+          <h3>Features</h3>
+          <ul class="help-list">
+            <li><strong>Extract Names:</strong> Extract names from Google, ContactOut (CO), or FastPeopleSearch (FPS)
+              search results.</li>
+            <li><strong>Apply Bark Data:</strong> Automatically fill in search parameters from Bark dashboard pages.
+            </li>
+            <li><strong>Search & Process:</strong> Search ZabaSearch and filter results based on email patterns.</li>
+          </ul>
+        </div>
+
+        <div class="help-section">
+          <h3>OpenAI API Key</h3>
+          <p>To use the name extraction feature, you need to provide your OpenAI API key in the Settings page. The key
+            is stored locally in your browser and is used to extract names from search results.</p>
+          <p><strong>How to get an API key:</strong></p>
+          <ol class="help-list">
+            <li>Visit <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI Platform</a></li>
+            <li>Sign in or create an account</li>
+            <li>Create a new API key</li>
+            <li>Copy the key and paste it in the Settings page</li>
+          </ol>
+        </div>
+
+        <div class="help-section">
+          <h3>Usage Instructions</h3>
+          <ol class="help-list">
+            <li>Go to the <strong>Settings</strong> page and enter your OpenAI API key</li>
+            <li>Fill in the search parameters (First Name, Email Pattern, City, State) or click "Apply Data from Bark" to apply data from Bark dashboard</li>
+            <li>Navigate to a Google, ContactOut, or FastPeopleSearch page</li>
+            <li>Click the appropriate extract button (Google, CO, or FPS)</li>
+            <li>Review the extracted names in the text area</li>
+            <li>Click "Search & Process" to find matching results</li>
+          </ol>
+        </div>
+
+        <div class="help-section">
+          <h3>Email Pattern</h3>
+          <p>The email pattern allows you to filter results. Use wildcards:</p>
+          <ul class="help-list">
+            <li><code>*</code> matches only one character</li>
+            <li>Example:<code>j******e@e*****e.com</code> matches john.doe@example.com.</li>
+          </ul>
+        </div>
+
+        <div class="help-section">
+          <h3>Keyboard Shortcuts</h3>
+          <ul class="help-list">
+            <li><strong>Ctrl+Shift+Y</strong> (Windows/Linux) or <strong>Cmd+Shift+Y</strong> (Mac): Open/Close sidebar
+            </li>
+            <li><strong>Ctrl+Shift+F</strong> (Windows/Linux) or <strong>Cmd+Shift+F</strong> (Mac): Copy Bark dashboard
+              content</li>
+          </ul>
+        </div>
+
+        <div class="help-section">
+          <h3>Support</h3>
+          <p>If you encounter any issues or have questions, please check that:</p>
+          <ul class="help-list">
+            <li>Your OpenAI API key is correctly entered in Settings</li>
+            <li>You have sufficient API credits</li>
+            <li>You are on the correct website when extracting names</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body>
+
+</html>

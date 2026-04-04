@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "Data Extractor",
+  "version": "1.0.0",
+  "description": "Extract data from search results and process them",
+  "permissions": [
+    "activeTab",
+    "sidePanel",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://contactout.com/*",
+    "https://www.fastpeoplesearch.com/*",
+    "https://www.zabasearch.com/*",
+    "https://www.bark.com/*",
+    "https://thatsthem.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Open Search Extractor"
+  },
+  "side_panel": {
+    "default_path": "src/sidebar/sidebar.html"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Toggle sidebar"
+    },
+    "copy-bark-content": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+F",
+        "mac": "Command+Shift+F"
+      },
+      "description": "Copy project details from bark dashboard"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.google.com/search*",
+        "https://www.fastpeoplesearch.com/name*",
+        "https://contactout.com/dashboard/search*",
+        "https://www.bark.com/sellers/dashboard/*"
+      ],
+      "js": ["content.js"]
+    }
+  ],
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}
