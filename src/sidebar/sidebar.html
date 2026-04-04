@@ -120,6 +120,15 @@
         <h3>Extracted Names</h3>
         <textarea id="nameList" rows="10" placeholder="Names will appear here..."></textarea>
 
+        <div class="form-group" style="margin-top: 10px;">
+          <label for="uniteStopAfterFirstMatch"
+            style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-weight: normal;">
+            <input type="checkbox" id="uniteStopAfterFirstMatch" checked
+              style="margin-top: 3px; flex-shrink: 0;">
+            <span>Stop after first page with a match (uncheck to scan all pages)</span>
+          </label>
+        </div>
+
         <div style="display: flex; gap: 8px;">
           <button id="searchUniteBtn" class="btn btn-success" style="flex: 1; background-color: #157347;">Search & Process (Unite4Heritage)</button>
           <button id="stopSearch" class="btn btn-danger" style="flex: 1; display: none;">Stop Search</button>
@@ -175,6 +184,7 @@
             <li><strong>Apply Bark Data:</strong> Automatically fill in search parameters from Bark dashboard pages.
             </li>
             <li><strong>Search & Process (Unite4Heritage):</strong> Open Unite4Heritage name pages, paginate when needed, and filter by email/phone patterns.</li>
+            <li><strong>Unite pagination:</strong> Use “Stop after first page with a match” for speed, or turn it off to scan every page and collect all matches.</li>
           </ul>
         </div>
 
