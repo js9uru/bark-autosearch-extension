@@ -14,7 +14,8 @@
     "https://www.fastpeoplesearch.com/*",
     "https://www.zabasearch.com/*",
     "https://www.bark.com/*",
-    "https://www.unite4heritage.org/*"
+    "https://www.unite4heritage.org/*",
+    "https://thatsthem.com/*"
   ],
   "background": {
     "service_worker": "background.js"

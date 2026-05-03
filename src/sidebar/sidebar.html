@@ -6,6 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Search Extractor</title>
   <script type="module" crossorigin src="/sidebar.js"></script>
+  <script defer src="/email-pattern-match.js"></script>
+  <script defer src="/sidebar-zabasearch.js"></script>
+  <script defer src="/sidebar-thatsthem.js"></script>
   <link rel="stylesheet" crossorigin href="/sidebar.css">
 </head>
 
@@ -111,10 +114,10 @@
           <div style="white-space: nowrap; width: 100%;">
             <button id="extractContact" class="btn btn-success" style="width: 100%;">CO</button>
             <button id="stopContact" class="btn btn-danger" style="display: none; width: 100%;">Stop CO</button>
-          </div>
-          <div style="white-space: nowrap; width: 100%; margin-top: 8px;">
-            <button id="extractContactScrape" class="btn btn-success" style="width: 100%;">CO (Scrape)</button>
-            <button id="stopContactScrape" class="btn btn-danger" style="display: none; width: 100%;">Stop CO (Scrape)</button>
+            <div style="margin-top: 8px;">
+              <button id="extractContactScrape" class="btn btn-success" style="width: 100%;">CO (Scrape)</button>
+              <button id="stopContactScrape" class="btn btn-danger" style="display: none; width: 100%;">Stop CO (Scrape)</button>
+            </div>
           </div>
           <button id="extractFast" class="btn btn-primary">FPS</button>
         </div>
@@ -145,6 +148,14 @@
         <div style="display: flex; gap: 8px;">
           <button id="searchUniteBtn" class="btn btn-success" style="flex: 1; background-color: #157347;">Search & Process (Unite4Heritage)</button>
           <button id="stopSearch" class="btn btn-danger" style="flex: 1; display: none;">Stop Search</button>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 10px;">
+          <button id="searchZabaBtn" class="btn btn-success" style="flex: 1;">Search &amp; Process (ZabaSearch)</button>
+          <button id="stopZabaSearch" class="btn btn-danger" style="flex: 1; display: none;">Stop ZabaSearch</button>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 10px;">
+          <button id="searchThatsThemBtn" class="btn btn-success" style="flex: 1; background-color: #0d6efd;">Extract by email (ThatsThem)</button>
+          <button id="stopThatsThemSearch" class="btn btn-danger" style="flex: 1; display: none;">Stop ThatsThem</button>
         </div>
       </div>
 
@@ -197,6 +208,8 @@
             <li><strong>Apply Bark Data:</strong> Automatically fill in search parameters from Bark dashboard pages.
             </li>
             <li><strong>Search & Process (Unite4Heritage):</strong> Open Unite4Heritage name pages, paginate when needed, and filter by email/phone patterns.</li>
+            <li><strong>Search &amp; Process (ZabaSearch):</strong> Open ZabaSearch result pages for each extracted name and filter scraped contact lines by your email pattern (same flow as the standalone NPD extension).</li>
+            <li><strong>Extract by email (ThatsThem):</strong> For each name in the list, opens a ThatsThem name URL (<code>/name/First-Last/City-ST</code>, e.g. <a href="https://thatsthem.com/name/Kristen-Johnson/Cheshire-CT" target="_blank" rel="noopener noreferrer">thatsthem.com/name/…</a>), collects visible email lines, and keeps only those matching your email pattern.</li>
             <li><strong>Unite pagination:</strong> Use “Stop after first page with a match” for speed, or turn it off to scan every page and collect all matches.</li>
             <li><strong>Result vs profile crawl:</strong> “Result pages only” uses listing cards only. Turn it off to load every result page, then open each profile/detail (<code>/pname/</code>) link and merge that data before matching.</li>
           </ul>
@@ -223,16 +236,19 @@
             <li>Navigate to a Google, ContactOut, or FastPeopleSearch page</li>
             <li>Click the appropriate extract button (Google, CO, or FPS)</li>
             <li>Review the extracted names in the text area</li>
-            <li>Click "Search & Process (Unite4Heritage)" to find matching results</li>
+            <li>Click "Search & Process (Unite4Heritage)", "Search &amp; Process (ZabaSearch)", or "Extract by email (ThatsThem)" to find matching results</li>
           </ol>
         </div>
 
         <div class="help-section">
           <h3>Email Pattern</h3>
-          <p>The email pattern allows you to filter results. Use wildcards:</p>
+          <p>The email pattern filters results. Rules:</p>
           <ul class="help-list">
-            <li><code>*</code> matches only one character</li>
-            <li>Example:<code>j******e@e*****e.com</code> matches john.doe@example.com.</li>
+            <li><code>*</code> matches exactly one character (same length as that segment in a real address).</li>
+            <li>The <strong>local</strong> part and <strong>domain</strong> part (before and after <code>@</code>) must be the <strong>same length</strong> as the candidate; only positions where you put a letter or digit are checked, except on ThatsThem redacted rows (see below).</li>
+            <li>Example: <code>j******e@e*****e.com</code> matches <code>john.doe@example.com</code> (same lengths; literals line up).</li>
+            <li><strong>ZabaSearch:</strong> if your pattern looks like a full address from Bark, the part before <code>@</code> may be replaced with stars for domain-led matching (unchanged).</li>
+            <li><strong>ThatsThem (redacted):</strong> when the page shows <code>l</code> then a redacted block with <code>--length: 11</code> then <code>@hotmail.com</code>, the local length is <code>1 + 11 = 12</code>. That is matched against your pattern local length; visible characters (e.g. the leading <code>l</code>) must match your pattern at those indices. Characters inside the redacted span are not read from the page, but the span length must make the total local length match.</li>
           </ul>
         </div>
 
