@@ -7,6 +7,7 @@
   <title>Search Extractor</title>
   <script type="module" crossorigin src="/sidebar.js"></script>
   <script defer src="/email-pattern-match.js"></script>
+  <script defer src="/phone-pattern-match.js"></script>
   <script defer src="/sidebar-zabasearch.js"></script>
   <script defer src="/sidebar-thatsthem.js"></script>
   <link rel="stylesheet" crossorigin href="/sidebar.css">
@@ -154,7 +155,7 @@
           <button id="stopZabaSearch" class="btn btn-danger" style="flex: 1; display: none;">Stop ZabaSearch</button>
         </div>
         <div style="display: flex; gap: 8px; margin-top: 10px;">
-          <button id="searchThatsThemBtn" class="btn btn-success" style="flex: 1; background-color: #0d6efd;">Extract by email (ThatsThem)</button>
+          <button id="searchThatsThemBtn" class="btn btn-success" style="flex: 1; background-color: #0d6efd;">Search ThatsThem</button>
           <button id="stopThatsThemSearch" class="btn btn-danger" style="flex: 1; display: none;">Stop ThatsThem</button>
         </div>
       </div>
@@ -209,7 +210,7 @@
             </li>
             <li><strong>Search & Process (Unite4Heritage):</strong> Open Unite4Heritage name pages, paginate when needed, and filter by email/phone patterns.</li>
             <li><strong>Search &amp; Process (ZabaSearch):</strong> Open ZabaSearch result pages for each extracted name and filter scraped contact lines by your email pattern (same flow as the standalone NPD extension).</li>
-            <li><strong>Extract by email (ThatsThem):</strong> For each name in the list, opens a ThatsThem name URL (<code>/name/First-Last/City-ST</code>, e.g. <a href="https://thatsthem.com/name/Kristen-Johnson/Cheshire-CT" target="_blank" rel="noopener noreferrer">thatsthem.com/name/…</a>), collects visible email lines, and keeps only those matching your email pattern.</li>
+            <li><strong>Search ThatsThem:</strong> For each name in the list, opens a ThatsThem name URL (<code>/name/First-Last/City-ST</code>, e.g. <a href="https://thatsthem.com/name/Kristen-Johnson/Cheshire-CT" target="_blank" rel="noopener noreferrer">thatsthem.com/name/…</a>), reads each person <strong>record card</strong> separately. The <strong>email pattern</strong> decides which cards qualify as a match. With <strong>email only</strong>, every phone on those cards is listed when present. If you add a <strong>phone pattern</strong>, only numbers on the same card that match it are listed; if none match, matching emails for that card still appear (the phone pattern never hides an email hit).</li>
             <li><strong>Unite pagination:</strong> Use “Stop after first page with a match” for speed, or turn it off to scan every page and collect all matches.</li>
             <li><strong>Result vs profile crawl:</strong> “Result pages only” uses listing cards only. Turn it off to load every result page, then open each profile/detail (<code>/pname/</code>) link and merge that data before matching.</li>
           </ul>
@@ -236,7 +237,7 @@
             <li>Navigate to a Google, ContactOut, or FastPeopleSearch page</li>
             <li>Click the appropriate extract button (Google, CO, or FPS)</li>
             <li>Review the extracted names in the text area</li>
-            <li>Click "Search & Process (Unite4Heritage)", "Search &amp; Process (ZabaSearch)", or "Extract by email (ThatsThem)" to find matching results</li>
+            <li>Click "Search & Process (Unite4Heritage)", "Search &amp; Process (ZabaSearch)", or "Search ThatsThem" to find matching results</li>
           </ol>
         </div>
 
@@ -250,6 +251,11 @@
             <li><strong>ZabaSearch:</strong> if your pattern looks like a full address from Bark, the part before <code>@</code> may be replaced with stars for domain-led matching (unchanged).</li>
             <li><strong>ThatsThem (redacted):</strong> when the page shows <code>l</code> then a redacted block with <code>--length: 11</code> then <code>@hotmail.com</code>, the local length is <code>1 + 11 = 12</code>. That is matched against your pattern local length; visible characters (e.g. the leading <code>l</code>) must match your pattern at those indices. Characters inside the redacted span are not read from the page, but the span length must make the total local length match.</li>
           </ul>
+        </div>
+
+        <div class="help-section">
+          <h3>Phone pattern (ThatsThem)</h3>
+          <p>For US numbers, patterns like <code>(909) ***-****</code> are matched against the <strong>10 digits</strong> of the phone (punctuation ignored): <code>*</code> is one digit. So <code>909-674-4035</code> matches that pattern; <code>916-337-9035</code> does not. If your pattern does not contain exactly 10 digits and stars total, matching falls back to same-length string rules with spaces normalized.</p>
         </div>
 
         <div class="help-section">
