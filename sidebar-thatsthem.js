@@ -2,6 +2,210 @@
  * ThatsThem name search pages — email and/or phone pattern matching (e.g. /name/Kristen-Johnson/Cheshire-CT).
  */
 (function () {
+  const SHEETS_CONFIG = {
+    spreadsheetId: "1rfv9DgxPrUuSQI7P5zYzGa3NEloSVnr-j9Fv3k9ndl4",
+    sheetTab: "test",
+    topN: 100,
+    statusColName: "Status",
+    todoValue: "Todo",
+    inProgressValue: "In progress",
+    nameColName: "Name",
+    locationColName: "Location",
+    phoneColName: "Phone",
+    emailColName: "Email",
+  };
+
+  function firstToken(s) {
+    const t = String(s || "").trim();
+    if (!t) return "";
+    return t.split(/\s+/)[0] || "";
+  }
+
+  function areaCodePrefix(phoneValue) {
+    const digits = String(phoneValue || "").replace(/\D/g, "");
+    return digits.length >= 3 ? digits.slice(0, 3) + "-" : "";
+  }
+
+  function normalizeLocationCityStateZip(locationValue) {
+    const raw = String(locationValue || "").trim();
+    if (!raw) return { city: "", st: "", zip: "", display: "" };
+    const cleaned = raw.replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s{2,}/g, " ").trim();
+    const m = cleaned.match(/^\s*([^,]+?)\s*,\s*([A-Z]{2})\s*,?\s*(\d{5}(?:-\d{4})?)\b/);
+    if (m) {
+      const city = (m[1] || "").trim();
+      const st = (m[2] || "").trim();
+      const zip = (m[3] || "").trim();
+      return { city, st, zip, display: `${city}, ${st}, ${zip}` };
+    }
+    return { city: "", st: "", zip: "", display: cleaned };
+  }
+
+  async function loadServiceAccountJson() {
+    const url = chrome.runtime.getURL("service_account.json");
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Missing service_account.json in extension folder");
+    return await res.json();
+  }
+
+  function base64UrlEncode(bytes) {
+    let bin = "";
+    const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    for (let i = 0; i < arr.length; i++) bin += String.fromCharCode(arr[i]);
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  }
+
+  function pemToArrayBuffer(pem) {
+    const b64 = String(pem || "")
+      .replace(/-----BEGIN [^-]+-----/g, "")
+      .replace(/-----END [^-]+-----/g, "")
+      .replace(/\s+/g, "");
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  async function signJwtRs256(privateKeyPem, header, payload) {
+    const enc = new TextEncoder();
+    const headerB64 = base64UrlEncode(enc.encode(JSON.stringify(header)));
+    const payloadB64 = base64UrlEncode(enc.encode(JSON.stringify(payload)));
+    const data = enc.encode(headerB64 + "." + payloadB64);
+
+    const key = await crypto.subtle.importKey(
+      "pkcs8",
+      pemToArrayBuffer(privateKeyPem),
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, data);
+    const sigB64 = base64UrlEncode(sig);
+    return headerB64 + "." + payloadB64 + "." + sigB64;
+  }
+
+  async function getServiceAccountAccessToken(sa) {
+    const now = Math.floor(Date.now() / 1000);
+    const jwt = await signJwtRs256(
+      sa.private_key,
+      { alg: "RS256", typ: "JWT" },
+      {
+        iss: sa.client_email,
+        scope: "https://www.googleapis.com/auth/spreadsheets",
+        aud: "https://oauth2.googleapis.com/token",
+        iat: now,
+        exp: now + 60 * 50,
+      }
+    );
+
+    const body = new URLSearchParams();
+    body.set("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer");
+    body.set("assertion", jwt);
+
+    const res = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+    if (!res.ok) throw new Error("Failed to get Sheets access token");
+    const data = await res.json();
+    return data.access_token;
+  }
+
+  function a1QuoteSheetTitle(title) {
+    const t = String(title || "");
+    return "'" + t.replace(/'/g, "''") + "'";
+  }
+
+  async function sheetsValuesGet(token, rangeA1) {
+    const url =
+      "https://sheets.googleapis.com/v4/spreadsheets/" +
+      encodeURIComponent(SHEETS_CONFIG.spreadsheetId) +
+      "/values/" +
+      encodeURIComponent(rangeA1);
+    const res = await fetch(url, {
+      headers: { Authorization: "Bearer " + token },
+    });
+    if (!res.ok) throw new Error("Sheets read failed: " + res.status);
+    return await res.json();
+  }
+
+  async function sheetsValuesUpdate(token, rangeA1, values) {
+    const url =
+      "https://sheets.googleapis.com/v4/spreadsheets/" +
+      encodeURIComponent(SHEETS_CONFIG.spreadsheetId) +
+      "/values/" +
+      encodeURIComponent(rangeA1) +
+      "?valueInputOption=USER_ENTERED";
+    const res = await fetch(url, {
+      method: "PUT",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ values }),
+    });
+    if (!res.ok) throw new Error("Sheets update failed: " + res.status);
+    return await res.json();
+  }
+
+  function colNumToA1(n) {
+    let x = n;
+    let s = "";
+    while (x > 0) {
+      const r = (x - 1) % 26;
+      s = String.fromCharCode("A".charCodeAt(0) + r) + s;
+      x = Math.floor((x - 1) / 26);
+    }
+    return s;
+  }
+
+  async function pickFirstTodoAndMarkInProgress() {
+    const sa = await loadServiceAccountJson();
+    const token = await getServiceAccountAccessToken(sa);
+
+    const maxRow = SHEETS_CONFIG.topN + 1;
+    const range =
+      a1QuoteSheetTitle(SHEETS_CONFIG.sheetTab) + "!A1:Z" + String(maxRow);
+    const data = await sheetsValuesGet(token, range);
+    const values = data.values || [];
+    if (!values.length) return { picked: false, reason: "Sheet is empty" };
+
+    const header = (values[0] || []).map((h) => String(h || "").trim());
+    const statusIdx = header.indexOf(SHEETS_CONFIG.statusColName);
+    if (statusIdx < 0) return { picked: false, reason: "Missing Status column" };
+
+    const nameIdx = header.indexOf(SHEETS_CONFIG.nameColName);
+    const locationIdx = header.indexOf(SHEETS_CONFIG.locationColName);
+    const phoneIdx = header.indexOf(SHEETS_CONFIG.phoneColName);
+    const emailIdx = header.indexOf(SHEETS_CONFIG.emailColName);
+
+    let pickedRowNumber = null;
+    let pickedRow = null;
+    for (let i = 1; i < values.length; i++) {
+      const row = values[i] || [];
+      const status = statusIdx < row.length ? String(row[statusIdx] || "").trim() : "";
+      if (status.toLowerCase() === SHEETS_CONFIG.todoValue.toLowerCase()) {
+        pickedRowNumber = i + 1; // because values[0] is row 1 header
+        pickedRow = row;
+        break;
+      }
+    }
+
+    if (!pickedRowNumber) return { picked: false, reason: "No Todo rows in top " + SHEETS_CONFIG.topN };
+
+    const colA1 = colNumToA1(statusIdx + 1);
+    const cellRange = a1QuoteSheetTitle(SHEETS_CONFIG.sheetTab) + "!" + colA1 + String(pickedRowNumber);
+    await sheetsValuesUpdate(token, cellRange, [[SHEETS_CONFIG.inProgressValue]]);
+    const rec = {
+      name: nameIdx >= 0 && pickedRow && nameIdx < pickedRow.length ? String(pickedRow[nameIdx] || "").trim() : "",
+      location:
+        locationIdx >= 0 && pickedRow && locationIdx < pickedRow.length ? String(pickedRow[locationIdx] || "").trim() : "",
+      phone: phoneIdx >= 0 && pickedRow && phoneIdx < pickedRow.length ? String(pickedRow[phoneIdx] || "").trim() : "",
+      email: emailIdx >= 0 && pickedRow && emailIdx < pickedRow.length ? String(pickedRow[emailIdx] || "").trim() : "",
+    };
+    return { picked: true, row: pickedRowNumber, range: cellRange, record: rec };
+  }
+
   function showStatus(el, text, kind) {
     if (!el) return;
     el.textContent = text;
@@ -207,6 +411,7 @@
   ready(function () {
     const searchThatsThemBtn = document.getElementById("searchThatsThemBtn");
     const stopThatsThemSearch = document.getElementById("stopThatsThemSearch");
+    const autoSearchSheetBtn = document.getElementById("autoSearchSheetBtn");
     const firstnameEl = document.getElementById("firstname");
     const emailPatternEl = document.getElementById("emailPattern");
     const phonePatternEl = document.getElementById("phonePattern");
@@ -224,6 +429,49 @@
       stopThatsThemSearch.addEventListener("click", function () {
         stopThatsThem = true;
         showStatus(statusEl, "Stopping ThatsThem…", "info");
+      });
+    }
+
+    if (autoSearchSheetBtn) {
+      autoSearchSheetBtn.addEventListener("click", async function () {
+        autoSearchSheetBtn.disabled = true;
+        try {
+          showStatus(statusEl, "Auto Search: checking Google Sheet for Todo…", "info");
+          const res = await pickFirstTodoAndMarkInProgress();
+          if (!res.picked) {
+            showStatus(statusEl, "Auto Search: " + res.reason, "error");
+            return;
+          }
+          const rec = res.record || {};
+          const loc = normalizeLocationCityStateZip(rec.location);
+          const criteria = `${firstToken(rec.name)} living in ${loc.display || rec.location}; ${areaCodePrefix(rec.phone)}`;
+
+          // Fill sidebar fields so you can run Search ThatsThem immediately.
+          if (firstnameEl) firstnameEl.value = firstToken(rec.name);
+          if (cityEl && loc.city) cityEl.value = loc.city;
+          if (emailPatternEl && rec.email) emailPatternEl.value = rec.email;
+          if (phonePatternEl && rec.phone) phonePatternEl.value = rec.phone;
+          if (nameList) nameList.value = rec.name ? rec.name : nameList.value;
+          if (stateEl && loc.st) {
+            const opts = stateEl.querySelectorAll("option");
+            for (let i = 0; i < opts.length; i++) {
+              const txt = (opts[i].textContent || "").trim();
+              if (txt.toUpperCase().startsWith(loc.st.toUpperCase() + " -")) {
+                stateEl.value = opts[i].value;
+                break;
+              }
+            }
+          }
+          showStatus(
+            statusEl,
+            "Auto Search: picked row " + res.row + " (Status → In progress). Criteria: " + criteria,
+            "success"
+          );
+        } catch (e) {
+          showStatus(statusEl, "Auto Search error: " + (e && e.message ? e.message : String(e)), "error");
+        } finally {
+          autoSearchSheetBtn.disabled = false;
+        }
       });
     }
 

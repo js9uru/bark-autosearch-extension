@@ -15,7 +15,9 @@
     "https://www.zabasearch.com/*",
     "https://www.bark.com/*",
     "https://www.unite4heritage.org/*",
-    "https://thatsthem.com/*"
+    "https://thatsthem.com/*",
+    "https://oauth2.googleapis.com/*",
+    "https://sheets.googleapis.com/*"
   ],
   "background": {
     "service_worker": "background.js"
