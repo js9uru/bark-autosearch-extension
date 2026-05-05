@@ -249,24 +249,40 @@
     return new Date().toISOString().replace(".000Z", "Z");
   }
 
-  function extractBestEmail(emails) {
+  function extractAllEmails(emails) {
     const arr = Array.isArray(emails) ? emails : [];
+    const out = [];
+    const seen = new Set();
     for (let i = 0; i < arr.length; i++) {
       const x = arr[i];
-      if (typeof x === "string" && x.trim()) return x.trim();
-      if (x && typeof x === "object" && x.redacted === true && x.hrefEmail) return String(x.hrefEmail).trim();
+      let v = "";
+      if (typeof x === "string") v = x.trim();
+      else if (x && typeof x === "object" && x.redacted === true && x.hrefEmail) v = String(x.hrefEmail).trim();
+      if (!v) continue;
+      const k = v.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(v);
     }
-    return "";
+    return out;
   }
 
-  function extractBestPhone(phones) {
+  function extractAllPhones(phones) {
     const arr = Array.isArray(phones) ? phones : [];
+    const out = [];
+    const seen = new Set();
     for (let i = 0; i < arr.length; i++) {
       const x = arr[i];
-      if (typeof x === "string" && x.trim()) return x.trim();
-      if (x && typeof x === "object" && x.redacted === true && x.hrefPhone) return String(x.hrefPhone).trim();
+      let v = "";
+      if (typeof x === "string") v = x.trim();
+      else if (x && typeof x === "object" && x.redacted === true && x.hrefPhone) v = String(x.hrefPhone).trim();
+      if (!v) continue;
+      const k = v.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(v);
     }
-    return "";
+    return out;
   }
 
   async function ensureContactsSheet(token) {
@@ -900,8 +916,8 @@
           if (matched.length > 0) {
             showStatus(statusEl, "Auto Search: saving to Bark_Contacts…", "info");
             const best = matched[0];
-            const bestEmail = extractBestEmail(best.data && best.data.emails);
-            const bestPhone = extractBestPhone(best.data && best.data.phones);
+            const allEmails = extractAllEmails(best.data && best.data.emails);
+            const allPhones = extractAllPhones(best.data && best.data.phones);
 
             const sa2 = await loadServiceAccountJson();
             const token2 = await getServiceAccountAccessToken(sa2);
@@ -911,8 +927,8 @@
               String(best.name || ""),
               String(rec.service || ""),
               String(loc.display || rec.location || ""),
-              String(bestPhone || ""),
-              String(bestEmail || ""),
+              allPhones.join("\n"),
+              allEmails.join("\n"),
               String(rec.verifiedPhone || ""),
               String(rec.details || ""),
               utcNowString(),
