@@ -860,7 +860,7 @@
           }
           const rec = res.record || {};
           const loc = normalizeLocationCityStateZip(rec.location);
-          const criteria = `${firstToken(rec.name)} living in ${loc.display || rec.location}; ${areaCodePrefix(rec.phone)}`;
+          const criteria = `${String(rec.name || "").trim()} living in ${loc.display || rec.location}; ${areaCodePrefix(rec.phone)}`;
 
           // Fill sidebar fields so you can run Search ThatsThem immediately.
           if (firstnameEl) firstnameEl.value = firstToken(rec.name);
