@@ -245,8 +245,17 @@
     return { picked: true, row: pickedRowNumber, range: cellRange, record: rec };
   }
 
-  function utcNowString() {
-    return new Date().toISOString().replace(".000Z", "Z");
+  function localNowString() {
+    const d = new Date();
+    // Example: 2026-05-06 00:19 GMT+9 (uses the user's local machine timezone)
+    const pad = (n) => String(n).padStart(2, "0");
+    const yyyy = d.getFullYear();
+    const mm = pad(d.getMonth() + 1);
+    const dd = pad(d.getDate());
+    const hh = pad(d.getHours());
+    const mi = pad(d.getMinutes());
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "local";
+    return `${yyyy}-${mm}-${dd} ${hh}:${mi} (${tz})`;
   }
 
   function extractAllEmails(emails) {
@@ -787,8 +796,10 @@
     }
 
     if (autoSearchSheetBtn) {
-      let autoSearchRunning = false;
-      let autoSearchCancelRequested = false;
+      let autoSearchRunning = false; // true only while a cycle is executing
+      let autoSearchEnabled = false; // true while interval mode is enabled
+      let stopAfterCurrentCycle = false;
+      let autoSearchIntervalId = null;
       const autoSearchDefaultLabel = autoSearchSheetBtn.textContent || "Auto Search";
       let restoreDisabledState = null;
 
@@ -831,26 +842,10 @@
         }
       }
 
-      autoSearchSheetBtn.addEventListener("click", async function () {
-        // Toggle behavior: first click starts, second click requests stop.
-        if (autoSearchRunning) {
-          autoSearchCancelRequested = true;
-          autoSearchSheetBtn.textContent = autoSearchDefaultLabel;
-          showStatus(statusEl, "Auto Search: stop requested…", "info");
-          try {
-            // Best-effort stop signal for ongoing Google extraction (content script watches this flag).
-            chrome.storage.local.set({ stopGoogleExtraction: true });
-          } catch (e) {
-            /* ignore */
-          }
-          return;
-        }
-
+      async function runAutoSearchCycle() {
+        // Non-overlapping: if a previous cycle is still running, skip this tick.
+        if (autoSearchRunning || !autoSearchEnabled) return;
         autoSearchRunning = true;
-        autoSearchCancelRequested = false;
-        autoSearchSheetBtn.textContent = "Stop Auto Search";
-        setOtherButtonsDisabled(true);
-        autoSearchSheetBtn.disabled = true;
         try {
           showStatus(statusEl, "Auto Search: checking Google Sheet for Todo…", "info");
           const res = await pickFirstTodoAndMarkInProgress();
@@ -898,11 +893,9 @@
               );
             };
             setGoogleProgress(1);
-            if (autoSearchCancelRequested) return;
             const names = await extractGoogleNamesFromCriteria(googleMatchToken, criteria, (p) => {
               if (p && typeof p.pageNum === "number") setGoogleProgress(p.pageNum);
             });
-            if (autoSearchCancelRequested) return;
             if (Array.isArray(names) && names.length && nameList) {
               nameList.value = names.join("\n");
             }
@@ -933,7 +926,7 @@
               allEmails.join("\n"),
               String(rec.verifiedPhone || ""),
               String(rec.details || ""),
-              utcNowString(),
+              localNowString(),
             ];
             await insertContactRowAtTop(token2, sheetInfo.sheetId, rowValues);
           }
@@ -944,11 +937,63 @@
           showStatus(statusEl, "Auto Search error: " + (e && e.message ? e.message : String(e)), "error");
         } finally {
           autoSearchRunning = false;
-          autoSearchCancelRequested = false;
-          setOtherButtonsDisabled(false);
-          autoSearchSheetBtn.disabled = false;
-          autoSearchSheetBtn.textContent = autoSearchDefaultLabel;
+          // If user requested stop while a cycle was running, we stop scheduling
+          // but let the cycle complete successfully.
+          if (!autoSearchEnabled || stopAfterCurrentCycle) {
+            stopAfterCurrentCycle = false;
+            autoSearchEnabled = false;
+            if (autoSearchIntervalId) {
+              clearInterval(autoSearchIntervalId);
+              autoSearchIntervalId = null;
+            }
+            setOtherButtonsDisabled(false);
+            autoSearchSheetBtn.textContent = autoSearchDefaultLabel;
+            autoSearchSheetBtn.disabled = false;
+          }
         }
+      }
+
+      function stopAutoSearch() {
+        // Stop scheduling new cycles. If a cycle is currently running,
+        // let it finish successfully, then clean up.
+        autoSearchEnabled = false;
+        if (autoSearchIntervalId) {
+          clearInterval(autoSearchIntervalId);
+          autoSearchIntervalId = null;
+        }
+        if (autoSearchRunning) {
+          stopAfterCurrentCycle = true;
+          autoSearchSheetBtn.textContent = "Stopping…";
+          autoSearchSheetBtn.disabled = true;
+          showStatus(statusEl, "Auto Search: will stop after current cycle finishes.", "info");
+          return;
+        }
+        setOtherButtonsDisabled(false);
+        autoSearchSheetBtn.textContent = autoSearchDefaultLabel;
+        autoSearchSheetBtn.disabled = false;
+        showStatus(statusEl, "Auto Search: stopped.", "info");
+      }
+
+      autoSearchSheetBtn.addEventListener("click", async function () {
+        // Toggle behavior:
+        // - first click enables interval mode (runs immediately, then every 5 minutes)
+        // - second click stops (and requests cancellation if a cycle is mid-flight)
+        if (autoSearchEnabled) {
+          stopAutoSearch();
+          return;
+        }
+
+        autoSearchEnabled = true;
+        stopAfterCurrentCycle = false;
+        autoSearchSheetBtn.textContent = "Stop Auto Search";
+        setOtherButtonsDisabled(true);
+        showStatus(statusEl, "Auto Search enabled (every 5 minutes).", "info");
+
+        // Run immediately, then every 5 minutes.
+        await runAutoSearchCycle();
+        autoSearchIntervalId = setInterval(function () {
+          runAutoSearchCycle();
+        }, 5 * 60 * 1000);
       });
     }
 
