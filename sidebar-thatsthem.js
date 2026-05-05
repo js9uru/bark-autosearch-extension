@@ -542,9 +542,11 @@
       });
     }
 
-    async function runThatsThemFromUi() {
+    async function runThatsThemFromUi(opts) {
       if (thatsThemRunning) return;
       thatsThemRunning = true;
+      const options = opts || {};
+      const controlButtons = options.controlButtons !== false; // default true
       try {
         const first = (firstnameEl && firstnameEl.value.trim()) || "";
         const emailPattern = (emailPatternEl && emailPatternEl.value.trim()) || "";
@@ -570,11 +572,13 @@
         }
 
         stopThatsThem = false;
-        searchThatsThemBtn.disabled = true;
-        searchThatsThemBtn.style.display = "none";
-        if (stopThatsThemSearch) {
-          stopThatsThemSearch.style.display = "block";
-          stopThatsThemSearch.disabled = false;
+        if (controlButtons) {
+          searchThatsThemBtn.disabled = true;
+          searchThatsThemBtn.style.display = "none";
+          if (stopThatsThemSearch) {
+            stopThatsThemSearch.style.display = "block";
+            stopThatsThemSearch.disabled = false;
+          }
         }
         if (resultsEl) resultsEl.innerHTML = "";
         showStatus(statusEl, "ThatsThem: processing " + lines.length + " name(s)…", "info");
@@ -628,9 +632,11 @@
           });
         }
 
-        searchThatsThemBtn.disabled = false;
-        searchThatsThemBtn.style.display = "block";
-        if (stopThatsThemSearch) stopThatsThemSearch.style.display = "none";
+        if (controlButtons) {
+          searchThatsThemBtn.disabled = false;
+          searchThatsThemBtn.style.display = "block";
+          if (stopThatsThemSearch) stopThatsThemSearch.style.display = "none";
+        }
 
         const matchedCount = results.filter(function (r) {
           return r.matched;
@@ -729,7 +735,7 @@
           // After Google finishes populating the names list, run the same matching logic
           // as clicking "Search ThatsThem".
           showStatus(statusEl, "Auto Search: running ThatsThem matching…", "info");
-          await runThatsThemFromUi();
+          await runThatsThemFromUi({ controlButtons: false });
 
           // If ThatsThem finished without showing an error, remind which row was picked.
           showStatus(statusEl, "Auto Search: finished. Picked row " + res.row + ".", "success");
@@ -745,7 +751,7 @@
     }
 
     searchThatsThemBtn.addEventListener("click", async function () {
-      await runThatsThemFromUi();
+      await runThatsThemFromUi({ controlButtons: true });
     });
   });
 })();
