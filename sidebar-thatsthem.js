@@ -533,12 +533,119 @@
     if (!searchThatsThemBtn || !nameList) return;
 
     let stopThatsThem = false;
+    let thatsThemRunning = false;
 
     if (stopThatsThemSearch) {
       stopThatsThemSearch.addEventListener("click", function () {
         stopThatsThem = true;
         showStatus(statusEl, "Stopping ThatsThem…", "info");
       });
+    }
+
+    async function runThatsThemFromUi() {
+      if (thatsThemRunning) return;
+      thatsThemRunning = true;
+      try {
+        const first = (firstnameEl && firstnameEl.value.trim()) || "";
+        const emailPattern = (emailPatternEl && emailPatternEl.value.trim()) || "";
+        const phonePattern = (phonePatternEl && phonePatternEl.value.trim()) || "";
+        const city = (cityEl && cityEl.value.trim()) || "";
+        const stateAbbr = stateSelectToAbbrev(stateEl);
+        const lines = nameList.value.split("\n").filter(function (l) {
+          return l.trim();
+        });
+
+        if (!first || !stateAbbr || !city || lines.length === 0) {
+          showStatus(
+            statusEl,
+            "Please fill first name, city, and state, extract names into the list, then try again.",
+            "error"
+          );
+          return;
+        }
+
+        if (!emailPattern && !phonePattern) {
+          showStatus(statusEl, "Please enter an email pattern and/or a phone pattern.", "error");
+          return;
+        }
+
+        stopThatsThem = false;
+        searchThatsThemBtn.disabled = true;
+        searchThatsThemBtn.style.display = "none";
+        if (stopThatsThemSearch) {
+          stopThatsThemSearch.style.display = "block";
+          stopThatsThemSearch.disabled = false;
+        }
+        if (resultsEl) resultsEl.innerHTML = "";
+        showStatus(statusEl, "ThatsThem: processing " + lines.length + " name(s)…", "info");
+
+        const results = [];
+        for (let i = 0; i < lines.length; i++) {
+          if (stopThatsThem) {
+            showStatus(
+              statusEl,
+              "ThatsThem stopped. Processed " +
+                i +
+                "/" +
+                lines.length +
+                " names, found " +
+                results.filter(function (r) {
+                  return r.matched;
+                }).length +
+                " matches.",
+              "info"
+            );
+            break;
+          }
+
+          const nameLine = lines[i].trim();
+          if (!nameLine) continue;
+
+          const url = buildThatsThemUrl(nameLine, city, stateAbbr);
+
+          showStatus(statusEl, "ThatsThem " + (i + 1) + "/" + lines.length + ": " + nameLine + "…", "info");
+
+          try {
+            const res = await new Promise(function (resolve) {
+              chrome.runtime.sendMessage({ action: "fetchPageDataThatsThem", url: url }, resolve);
+            });
+            const raw = (res && res.data) || null;
+            const m = computeThatsThemMatches(raw, emailPattern, phonePattern);
+            const row = {
+              name: nameLine,
+              url: url,
+              data: { emails: m.emails, phones: m.phones },
+              matched: m.matched,
+            };
+            results.push(row);
+            if (row.matched) appendResult(resultsEl, row);
+          } catch (e) {
+            /* next */
+          }
+
+          await new Promise(function (r) {
+            setTimeout(r, 500);
+          });
+        }
+
+        searchThatsThemBtn.disabled = false;
+        searchThatsThemBtn.style.display = "block";
+        if (stopThatsThemSearch) stopThatsThemSearch.style.display = "none";
+
+        const matchedCount = results.filter(function (r) {
+          return r.matched;
+        }).length;
+        const total = results.length;
+        if (!stopThatsThem) {
+          showStatus(
+            statusEl,
+            "ThatsThem done. Processed " + total + " name(s), found " + matchedCount + " match(es).",
+            matchedCount ? "success" : "error"
+          );
+        }
+      } finally {
+        thatsThemRunning = false;
+      }
     }
 
     if (autoSearchSheetBtn) {
@@ -619,11 +726,13 @@
             }
           }
 
-          showStatus(
-            statusEl,
-            "Auto Search: picked row " + res.row + " (Status → In progress). Criteria: " + criteria,
-            "success"
-          );
+          // After Google finishes populating the names list, run the same matching logic
+          // as clicking "Search ThatsThem".
+          showStatus(statusEl, "Auto Search: running ThatsThem matching…", "info");
+          await runThatsThemFromUi();
+
+          // If ThatsThem finished without showing an error, remind which row was picked.
+          showStatus(statusEl, "Auto Search: finished. Picked row " + res.row + ".", "success");
         } catch (e) {
           showStatus(statusEl, "Auto Search error: " + (e && e.message ? e.message : String(e)), "error");
         } finally {
@@ -636,103 +745,7 @@
     }
 
     searchThatsThemBtn.addEventListener("click", async function () {
-      const first = (firstnameEl && firstnameEl.value.trim()) || "";
-      const emailPattern = (emailPatternEl && emailPatternEl.value.trim()) || "";
-      const phonePattern = (phonePatternEl && phonePatternEl.value.trim()) || "";
-      const city = (cityEl && cityEl.value.trim()) || "";
-      const stateAbbr = stateSelectToAbbrev(stateEl);
-      const lines = nameList.value.split("\n").filter(function (l) {
-        return l.trim();
-      });
-
-      if (!first || !stateAbbr || !city || lines.length === 0) {
-        showStatus(
-          statusEl,
-          "Please fill first name, city, and state, extract names into the list, then try again.",
-          "error"
-        );
-        return;
-      }
-
-      if (!emailPattern && !phonePattern) {
-        showStatus(statusEl, "Please enter an email pattern and/or a phone pattern.", "error");
-        return;
-      }
-
-      stopThatsThem = false;
-      searchThatsThemBtn.disabled = true;
-      searchThatsThemBtn.style.display = "none";
-      if (stopThatsThemSearch) {
-        stopThatsThemSearch.style.display = "block";
-        stopThatsThemSearch.disabled = false;
-      }
-      if (resultsEl) resultsEl.innerHTML = "";
-      showStatus(statusEl, "ThatsThem: processing " + lines.length + " name(s)…", "info");
-
-      const results = [];
-      for (let i = 0; i < lines.length; i++) {
-        if (stopThatsThem) {
-          showStatus(
-            statusEl,
-            "ThatsThem stopped. Processed " +
-              i +
-              "/" +
-              lines.length +
-              " names, found " +
-              results.filter(function (r) {
-                return r.matched;
-              }).length +
-              " matches.",
-            "info"
-          );
-          break;
-        }
-
-        const nameLine = lines[i].trim();
-        if (!nameLine) continue;
-
-        const url = buildThatsThemUrl(nameLine, city, stateAbbr);
-
-        showStatus(statusEl, "ThatsThem " + (i + 1) + "/" + lines.length + ": " + nameLine + "…", "info");
-
-        try {
-          const res = await new Promise(function (resolve) {
-            chrome.runtime.sendMessage({ action: "fetchPageDataThatsThem", url: url }, resolve);
-          });
-          const raw = (res && res.data) || null;
-          const m = computeThatsThemMatches(raw, emailPattern, phonePattern);
-          const row = {
-            name: nameLine,
-            url: url,
-            data: { emails: m.emails, phones: m.phones },
-            matched: m.matched,
-          };
-          results.push(row);
-          if (row.matched) appendResult(resultsEl, row);
-        } catch (e) {
-          /* next */
-        }
-
-        await new Promise(function (r) {
-          setTimeout(r, 500);
-        });
-      }
-
-      searchThatsThemBtn.disabled = false;
-      searchThatsThemBtn.style.display = "block";
-      if (stopThatsThemSearch) stopThatsThemSearch.style.display = "none";
-
-      const matchedCount = results.filter(function (r) {
-        return r.matched;
-      }).length;
-      const total = results.length;
-      if (!stopThatsThem) {
-        showStatus(
-          statusEl,
-          "ThatsThem done. Processed " + total + " name(s), found " + matchedCount + " match(es).",
-          matchedCount ? "success" : "error"
-        );
-      }
+      await runThatsThemFromUi();
     });
   });
 })();
