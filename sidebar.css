@@ -172,6 +172,12 @@ textarea {
   font-size: 12px;
   color: #666;
 }
+.result-data-lines {
+  display: block;
+  margin-top: 4px;
+  line-height: 1.5;
+  word-break: break-word;
+}
 
 /* Google / CO / FPS inline row */
 .extract-buttons-group {

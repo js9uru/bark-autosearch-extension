@@ -9,6 +9,14 @@
     el.style.display = "block";
   }
 
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
   function filterByEmailPattern(rows, pattern) {
     if (!pattern) return [];
     const M = typeof EmailPatternMatch !== "undefined" ? EmailPatternMatch : null;
@@ -33,17 +41,20 @@
         <a href="${payload.url}" target="_blank" rel="noopener noreferrer">${payload.name}</a>
       </div>
       <div class="result-data">
-        <strong>Data found:</strong> ${
+        <strong>Data found:</strong>
+        <span class="result-data-lines">${
           payload.data.length > 0
             ? payload.data
                 .map(function (r) {
-                  return typeof EmailPatternMatch !== "undefined" && EmailPatternMatch.formatRowForDisplay
-                    ? EmailPatternMatch.formatRowForDisplay(r)
-                    : String(r);
+                  const line =
+                    typeof EmailPatternMatch !== "undefined" && EmailPatternMatch.formatRowForDisplay
+                      ? EmailPatternMatch.formatRowForDisplay(r)
+                      : String(r);
+                  return escapeHtml(line);
                 })
-                .join(", ")
+                .join("<br>")
             : "None"
-        }
+        }</span>
       </div>
     `;
     resultsEl.appendChild(t);

@@ -1,6 +1,7 @@
 /**
  * Email pattern: * matches exactly one character; full local + domain lengths must match.
- * Supports ThatsThem-style redacted rows: { redacted, prefix, suffix, redactedLen, domain }.
+ * ThatsThem redacted rows: { redacted, prefix, suffix, redactedLen, domain, hrefEmail?, xHref?, xHrefDecoded? }.
+ * formatRowForDisplay: "page → full · x-href L2V…Y29t" (middle-elided base64).
  */
 (function (global) {
   function splitPattern(pattern) {
@@ -86,10 +87,30 @@
     });
   }
 
+  /** Shorten long opaque strings (e.g. base64 x-href) for display. */
+  function shortenMiddle(s, maxLen) {
+    const t = String(s || "").trim();
+    const n = maxLen > 8 ? maxLen : 24;
+    if (t.length <= n) return t;
+    const keep = n - 1;
+    const a = Math.ceil(keep / 2);
+    const b = Math.floor(keep / 2);
+    return t.slice(0, a) + "\u2026" + t.slice(-b);
+  }
+
   function formatRowForDisplay(row) {
     if (typeof row === "string") return row;
     if (row && row.redacted === true) {
-      return row.prefix + "(+" + row.redactedLen + ")@" + row.domain;
+      const page = row.prefix + "(+" + row.redactedLen + ")@" + row.domain;
+      const full = row.hrefEmail != null ? String(row.hrefEmail).trim() : "";
+      const rawAttr = row.xHref != null ? String(row.xHref).trim() : "";
+      const pathOnly =
+        row.xHrefDecoded != null ? String(row.xHrefDecoded).trim() : "";
+      let line = page;
+      if (full) line += " \u2192 " + full;
+      if (rawAttr) line += " \u00b7 x-href " + shortenMiddle(rawAttr, 40);
+      else if (pathOnly) line += " \u00b7 path " + shortenMiddle(pathOnly, 48);
+      return line;
     }
     return String(row);
   }

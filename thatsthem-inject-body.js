@@ -14,15 +14,19 @@
       .replace(/\s+/g, "");
     return /^[\w.%+-]+@[\w.-]+\.[a-z]{2,}$/i.test(t) ? t : null;
   };
-  function decodeXHref(b64) {
-    if (!b64 || typeof b64 !== "string") return null;
+  function decodeXHrefMeta(b64) {
+    if (!b64 || typeof b64 !== "string") return { email: null, path: null, raw: "" };
+    const raw = b64.trim();
     try {
-      const bin = atob(b64.trim());
-      const m = bin.match(/([\w.%+-]+@[\w.-]+\.[a-z]{2,})/i);
-      return m ? m[1] : null;
+      const path = atob(raw);
+      const m = path.match(/([\w.%+-]+@[\w.-]+\.[a-z]{2,})/i);
+      return { email: m ? m[1] : null, path, raw };
     } catch (err) {
-      return null;
+      return { email: null, path: null, raw };
     }
+  }
+  function decodeXHref(b64) {
+    return decodeXHrefMeta(b64).email;
   }
   function parseRedactedLi(li) {
     const red = li.querySelector('.redacted,span.redacted,[class*="redacted"]');
@@ -66,16 +70,31 @@
   function scrapeFromRoot(root) {
     if (!root) return;
     root.querySelectorAll("[x-href]").forEach((el) => {
+      const li = el.closest("li");
+      if (
+        li &&
+        li.querySelector('.redacted,span.redacted,[class*="redacted"]')
+      ) {
+        return;
+      }
       const e = decodeXHref(el.getAttribute("x-href"));
       if (e) add(e);
     });
     root.querySelectorAll("li").forEach((li) => {
-      li.querySelectorAll("[x-href]").forEach((xel) => {
-        const e = decodeXHref(xel.getAttribute("x-href"));
-        if (e) add(e);
-      });
+      const xEl = li.querySelector("[x-href]");
+      const meta = decodeXHrefMeta(xEl && xEl.getAttribute("x-href"));
       const o = parseRedactedLi(li);
-      if (o) add(o);
+      if (o) {
+        if (meta.email) o.hrefEmail = meta.email;
+        if (meta.raw) o.xHref = meta.raw;
+        if (meta.path && !meta.email) o.xHrefDecoded = meta.path;
+        add(o);
+      } else {
+        li.querySelectorAll("[x-href]").forEach((xel) => {
+          const e = decodeXHref(xel.getAttribute("x-href"));
+          if (e) add(e);
+        });
+      }
       const a = li.querySelector("a[href^='mailto:']");
       if (a) {
         let m = a.href.replace(/^mailto:/i, "").split("?")[0];
@@ -113,5 +132,16 @@
     }
     walk(main);
   }
-  return out;
+  const hrefSet = new Set();
+  for (const x of out) {
+    if (x && x.redacted === true && x.hrefEmail) {
+      hrefSet.add(String(x.hrefEmail).trim().toLowerCase());
+    }
+  }
+  const deduped = out.filter((x) => {
+    if (typeof x !== "string") return true;
+    const t = x.trim().toLowerCase();
+    return !hrefSet.has(t);
+  });
+  return deduped;
 }
