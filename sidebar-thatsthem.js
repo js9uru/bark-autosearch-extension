@@ -2,6 +2,8 @@
  * ThatsThem name search pages — email and/or phone pattern matching (e.g. /name/Kristen-Johnson/Cheshire-CT).
  */
 (function () {
+  const AUTO_SEARCH_INTERVAL_MINUTES = 3;
+  const AUTO_SEARCH_INTERVAL_MS = AUTO_SEARCH_INTERVAL_MINUTES * 60 * 1000;
   const SHEETS_CONFIG = {
     spreadsheetId: "1rfv9DgxPrUuSQI7P5zYzGa3NEloSVnr-j9Fv3k9ndl4",
     sheetTab: "test",
@@ -994,7 +996,7 @@
             autoSearchSheetBtn.disabled = false;
             stopCountdown();
           } else {
-            nextCycleAtMs = Date.now() + 5 * 60 * 1000;
+            nextCycleAtMs = Date.now() + AUTO_SEARCH_INTERVAL_MS;
           }
         }
       }
@@ -1038,11 +1040,11 @@
 
         // Run immediately, then every 5 minutes.
         await runAutoSearchCycle();
-        nextCycleAtMs = Date.now() + 5 * 60 * 1000;
+        nextCycleAtMs = Date.now() + AUTO_SEARCH_INTERVAL_MS;
         startCountdown();
         autoSearchIntervalId = setInterval(function () {
           runAutoSearchCycle();
-        }, 5 * 60 * 1000);
+        }, AUTO_SEARCH_INTERVAL_MS);
       });
     }
 
