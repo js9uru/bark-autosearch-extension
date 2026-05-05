@@ -13,6 +13,10 @@
     locationColName: "Location",
     phoneColName: "Phone",
     emailColName: "Email",
+    serviceColName: "Service",
+    verifiedPhoneColName: "Verified Phone",
+    detailsColName: "Details Q&A",
+    contactsTab: "Bark_Contacts",
   };
 
   function firstToken(s) {
@@ -148,6 +152,33 @@
     return await res.json();
   }
 
+  async function sheetsSpreadsheetGet(token) {
+    const url =
+      "https://sheets.googleapis.com/v4/spreadsheets/" +
+      encodeURIComponent(SHEETS_CONFIG.spreadsheetId) +
+      "?fields=sheets(properties(sheetId,title))";
+    const res = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+    if (!res.ok) throw new Error("Sheets metadata failed: " + res.status);
+    return await res.json();
+  }
+
+  async function sheetsBatchUpdate(token, requests) {
+    const url =
+      "https://sheets.googleapis.com/v4/spreadsheets/" +
+      encodeURIComponent(SHEETS_CONFIG.spreadsheetId) +
+      ":batchUpdate";
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ requests: requests || [] }),
+    });
+    if (!res.ok) throw new Error("Sheets batchUpdate failed: " + res.status);
+    return await res.json();
+  }
+
   function colNumToA1(n) {
     let x = n;
     let s = "";
@@ -178,6 +209,9 @@
     const locationIdx = header.indexOf(SHEETS_CONFIG.locationColName);
     const phoneIdx = header.indexOf(SHEETS_CONFIG.phoneColName);
     const emailIdx = header.indexOf(SHEETS_CONFIG.emailColName);
+    const serviceIdx = header.indexOf(SHEETS_CONFIG.serviceColName);
+    const verifiedIdx = header.indexOf(SHEETS_CONFIG.verifiedPhoneColName);
+    const detailsIdx = header.indexOf(SHEETS_CONFIG.detailsColName);
 
     let pickedRowNumber = null;
     let pickedRow = null;
@@ -202,8 +236,89 @@
         locationIdx >= 0 && pickedRow && locationIdx < pickedRow.length ? String(pickedRow[locationIdx] || "").trim() : "",
       phone: phoneIdx >= 0 && pickedRow && phoneIdx < pickedRow.length ? String(pickedRow[phoneIdx] || "").trim() : "",
       email: emailIdx >= 0 && pickedRow && emailIdx < pickedRow.length ? String(pickedRow[emailIdx] || "").trim() : "",
+      service: serviceIdx >= 0 && pickedRow && serviceIdx < pickedRow.length ? String(pickedRow[serviceIdx] || "").trim() : "",
+      verifiedPhone:
+        verifiedIdx >= 0 && pickedRow && verifiedIdx < pickedRow.length ? String(pickedRow[verifiedIdx] || "").trim() : "",
+      details:
+        detailsIdx >= 0 && pickedRow && detailsIdx < pickedRow.length ? String(pickedRow[detailsIdx] || "").trim() : "",
     };
     return { picked: true, row: pickedRowNumber, range: cellRange, record: rec };
+  }
+
+  function utcNowString() {
+    return new Date().toISOString().replace(".000Z", "Z");
+  }
+
+  function extractBestEmail(emails) {
+    const arr = Array.isArray(emails) ? emails : [];
+    for (let i = 0; i < arr.length; i++) {
+      const x = arr[i];
+      if (typeof x === "string" && x.trim()) return x.trim();
+      if (x && typeof x === "object" && x.redacted === true && x.hrefEmail) return String(x.hrefEmail).trim();
+    }
+    return "";
+  }
+
+  function extractBestPhone(phones) {
+    const arr = Array.isArray(phones) ? phones : [];
+    for (let i = 0; i < arr.length; i++) {
+      const x = arr[i];
+      if (typeof x === "string" && x.trim()) return x.trim();
+      if (x && typeof x === "object" && x.redacted === true && x.hrefPhone) return String(x.hrefPhone).trim();
+    }
+    return "";
+  }
+
+  async function ensureContactsSheet(token) {
+    const meta = await sheetsSpreadsheetGet(token);
+    const list = (meta && meta.sheets) || [];
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i] && list[i].properties ? list[i].properties : {};
+      if (p.title === SHEETS_CONFIG.contactsTab) return { sheetId: p.sheetId, created: false };
+    }
+
+    const addResp = await sheetsBatchUpdate(token, [
+      { addSheet: { properties: { title: SHEETS_CONFIG.contactsTab } } },
+    ]);
+    const sheetId =
+      addResp &&
+      addResp.replies &&
+      addResp.replies[0] &&
+      addResp.replies[0].addSheet &&
+      addResp.replies[0].addSheet.properties &&
+      addResp.replies[0].addSheet.properties.sheetId;
+
+    // Write header row for Bark_Contacts (no Status).
+    const header = [
+      "Name",
+      "Service",
+      "Location",
+      "Phone",
+      "Email",
+      "Verified Phone",
+      "Details Q&A",
+      "Added At",
+    ];
+    await sheetsValuesUpdate(token, a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab) + "!A1", [header]);
+    return { sheetId: sheetId, created: true };
+  }
+
+  async function insertContactRowAtTop(token, contactsSheetId, rowValues) {
+    // Insert one row at index 1 (i.e. row 2, below header).
+    await sheetsBatchUpdate(token, [
+      {
+        insertDimension: {
+          range: {
+            sheetId: contactsSheetId,
+            dimension: "ROWS",
+            startIndex: 1,
+            endIndex: 2,
+          },
+          inheritFromBefore: false,
+        },
+      },
+    ]);
+    await sheetsValuesUpdate(token, a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab) + "!A2", [rowValues]);
   }
 
   async function waitTabComplete(tabId, timeoutMs) {
@@ -563,12 +678,12 @@
             "Please fill first name, city, and state, extract names into the list, then try again.",
             "error"
           );
-          return;
+          return [];
         }
 
         if (!emailPattern && !phonePattern) {
           showStatus(statusEl, "Please enter an email pattern and/or a phone pattern.", "error");
-          return;
+          return [];
         }
 
         stopThatsThem = false;
@@ -649,6 +764,7 @@
             matchedCount ? "success" : "error"
           );
         }
+        return results;
       } finally {
         thatsThemRunning = false;
       }
@@ -658,6 +774,47 @@
       let autoSearchRunning = false;
       let autoSearchCancelRequested = false;
       const autoSearchDefaultLabel = autoSearchSheetBtn.textContent || "Auto Search";
+      let restoreDisabledState = null;
+
+      function setOtherButtonsDisabled(disabled) {
+        const ids = [
+          "extractGoogle",
+          "stopGoogle",
+          "extractContact",
+          "stopContact",
+          "extractFast",
+          "extractContactScrape",
+          "stopContactScrape",
+          "applyBarkData",
+          "searchUniteBtn",
+          "stopSearch",
+          "searchZabaBtn",
+          "stopZabaSearch",
+          "searchThatsThemBtn",
+          "stopThatsThemSearch",
+        ];
+        const els = ids
+          .map((id) => document.getElementById(id))
+          .filter((x) => x && x !== autoSearchSheetBtn);
+
+        if (disabled) {
+          const prev = new Map();
+          els.forEach((el) => prev.set(el, !!el.disabled));
+          restoreDisabledState = function () {
+            els.forEach((el) => {
+              const was = prev.get(el);
+              if (typeof was === "boolean") el.disabled = was;
+            });
+          };
+          els.forEach((el) => {
+            el.disabled = true;
+          });
+        } else {
+          if (typeof restoreDisabledState === "function") restoreDisabledState();
+          restoreDisabledState = null;
+        }
+      }
+
       autoSearchSheetBtn.addEventListener("click", async function () {
         // Toggle behavior: first click starts, second click requests stop.
         if (autoSearchRunning) {
@@ -676,6 +833,7 @@
         autoSearchRunning = true;
         autoSearchCancelRequested = false;
         autoSearchSheetBtn.textContent = "Stop Auto Search";
+        setOtherButtonsDisabled(true);
         autoSearchSheetBtn.disabled = true;
         try {
           showStatus(statusEl, "Auto Search: checking Google Sheet for Todo…", "info");
@@ -735,7 +893,32 @@
           // After Google finishes populating the names list, run the same matching logic
           // as clicking "Search ThatsThem".
           showStatus(statusEl, "Auto Search: running ThatsThem matching…", "info");
-          await runThatsThemFromUi({ controlButtons: false });
+          const matchResults = await runThatsThemFromUi({ controlButtons: false });
+
+          // If we found any matches, add a row to Bark_Contacts at the top.
+          const matched = (matchResults || []).filter((r) => r && r.matched);
+          if (matched.length > 0) {
+            showStatus(statusEl, "Auto Search: saving to Bark_Contacts…", "info");
+            const best = matched[0];
+            const bestEmail = extractBestEmail(best.data && best.data.emails);
+            const bestPhone = extractBestPhone(best.data && best.data.phones);
+
+            const sa2 = await loadServiceAccountJson();
+            const token2 = await getServiceAccountAccessToken(sa2);
+            const sheetInfo = await ensureContactsSheet(token2);
+
+            const rowValues = [
+              String(best.name || ""),
+              String(rec.service || ""),
+              String(loc.display || rec.location || ""),
+              String(bestPhone || ""),
+              String(bestEmail || ""),
+              String(rec.verifiedPhone || ""),
+              String(rec.details || ""),
+              utcNowString(),
+            ];
+            await insertContactRowAtTop(token2, sheetInfo.sheetId, rowValues);
+          }
 
           // If ThatsThem finished without showing an error, remind which row was picked.
           showStatus(statusEl, "Auto Search: finished. Picked row " + res.row + ".", "success");
@@ -744,6 +927,7 @@
         } finally {
           autoSearchRunning = false;
           autoSearchCancelRequested = false;
+          setOtherButtonsDisabled(false);
           autoSearchSheetBtn.disabled = false;
           autoSearchSheetBtn.textContent = autoSearchDefaultLabel;
         }
