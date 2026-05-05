@@ -863,7 +863,9 @@
           const criteria = `${String(rec.name || "").trim()} living in ${loc.display || rec.location}; ${areaCodePrefix(rec.phone)}`;
 
           // Fill sidebar fields so you can run Search ThatsThem immediately.
-          if (firstnameEl) firstnameEl.value = firstToken(rec.name);
+          const fullName = String(rec.name || "").trim();
+          const googleMatchToken = firstToken(fullName);
+          if (firstnameEl) firstnameEl.value = fullName;
           if (cityEl && loc.city) cityEl.value = loc.city;
           if (emailPatternEl && rec.email) emailPatternEl.value = rec.email;
           if (phonePatternEl && rec.phone) phonePatternEl.value = rec.phone;
@@ -883,7 +885,7 @@
           showStatus(statusEl, "Search criteria:\n" + criteria, "info");
 
           // Run Google name extraction using the criteria (same as Google button).
-          if (firstnameEl && firstnameEl.value.trim()) {
+          if (googleMatchToken) {
             const setGoogleProgress = (pageNum) => {
               const pn = pageNum != null ? String(pageNum) : "?";
               showStatus(
@@ -897,7 +899,7 @@
             };
             setGoogleProgress(1);
             if (autoSearchCancelRequested) return;
-            const names = await extractGoogleNamesFromCriteria(firstnameEl.value.trim(), criteria, (p) => {
+            const names = await extractGoogleNamesFromCriteria(googleMatchToken, criteria, (p) => {
               if (p && typeof p.pageNum === "number") setGoogleProgress(p.pageNum);
             });
             if (autoSearchCancelRequested) return;
