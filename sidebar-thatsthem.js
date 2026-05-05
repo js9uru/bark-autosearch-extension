@@ -6,7 +6,7 @@
   const AUTO_SEARCH_INTERVAL_MS = AUTO_SEARCH_INTERVAL_MINUTES * 60 * 1000;
   const SHEETS_CONFIG = {
     spreadsheetId: "1rfv9DgxPrUuSQI7P5zYzGa3NEloSVnr-j9Fv3k9ndl4",
-    sheetTab: "test",
+    sheetTab: "Bark_Leads",
     topN: 100,
     statusColName: "Status",
     todoValue: "Todo",
