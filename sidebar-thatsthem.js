@@ -9,6 +9,8 @@
     statusColName: "Status",
     todoValue: "Todo",
     inProgressValue: "In progress",
+    foundValue: "Found",
+    notFoundValue: "No found",
     nameColName: "Name",
     locationColName: "Location",
     phoneColName: "Phone",
@@ -929,6 +931,20 @@
               localNowString(),
             ];
             await insertContactRowAtTop(token2, sheetInfo.sheetId, rowValues);
+          }
+
+          // Update the picked row's Status in the source sheet based on results.
+          try {
+            const sa3 = await loadServiceAccountJson();
+            const token3 = await getServiceAccountAccessToken(sa3);
+            const statusValue = matched.length > 0 ? SHEETS_CONFIG.foundValue : SHEETS_CONFIG.notFoundValue;
+            await sheetsValuesUpdate(token3, res.range, [[statusValue]]);
+          } catch (e) {
+            showStatus(
+              statusEl,
+              "Auto Search warning: failed to update Status to Found/No found. " + (e && e.message ? e.message : String(e)),
+              "error"
+            );
           }
 
           // If ThatsThem finished without showing an error, remind which row was picked.
