@@ -206,6 +206,98 @@
     return { picked: true, row: pickedRowNumber, range: cellRange, record: rec };
   }
 
+  async function waitTabComplete(tabId, timeoutMs) {
+    const start = Date.now();
+    return await new Promise((resolve, reject) => {
+      const t = typeof timeoutMs === "number" ? timeoutMs : 45000;
+      const timer = setInterval(() => {
+        if (Date.now() - start > t) {
+          clearInterval(timer);
+          chrome.tabs.onUpdated.removeListener(onUpdated);
+          reject(new Error("Google tab load timeout"));
+        }
+      }, 250);
+      const onUpdated = (id, info) => {
+        if (id === tabId && info.status === "complete") {
+          clearInterval(timer);
+          chrome.tabs.onUpdated.removeListener(onUpdated);
+          resolve(true);
+        }
+      };
+      chrome.tabs.onUpdated.addListener(onUpdated);
+      chrome.tabs.get(tabId, (tab) => {
+        if (tab && tab.status === "complete") {
+          clearInterval(timer);
+          chrome.tabs.onUpdated.removeListener(onUpdated);
+          resolve(true);
+        }
+      });
+    });
+  }
+
+  function googleSearchUrl(criteria) {
+    const q = String(criteria || "").trim();
+    return "https://www.google.com/search?hl=en&gl=us&pws=0&q=" + encodeURIComponent(q);
+  }
+
+  async function extractGoogleNamesFromCriteria(firstname, criteria) {
+    const url = googleSearchUrl(criteria);
+    const tab = await chrome.tabs.create({ url, active: false });
+    const tabId = tab && tab.id;
+    if (!tabId) throw new Error("Failed to open Google tab");
+
+    let onDone = null;
+    let doneTimer = null;
+    const donePromise = new Promise((resolve) => {
+      onDone = (msg) => {
+        if (msg && msg.action === "googleExtractionComplete") resolve(msg);
+      };
+      chrome.runtime.onMessage.addListener(onDone);
+    });
+
+    try {
+      await waitTabComplete(tabId, 45000);
+
+      // Ask the content script on the Google SERP to extract names (same as the Google button).
+      const res = await new Promise((resolve) => {
+        chrome.tabs.sendMessage(tabId, { action: "extractNamesGoogle", firstname: String(firstname || "").trim() }, resolve);
+      });
+      if (!res || res.success !== true) {
+        throw new Error((res && res.error) || "Google extraction failed");
+      }
+      if (res.navigating) {
+        // Wait for completion signal from the content script (it paginates all pages).
+        // Also keep a fallback poll so we can still return partial names if needed.
+        const timeoutMs = 180000; // 3 minutes
+        const timeoutPromise = new Promise((resolve) => {
+          doneTimer = setTimeout(() => resolve(null), timeoutMs);
+        });
+        const doneMsg = await Promise.race([donePromise, timeoutPromise]);
+        if (doneMsg && Array.isArray(doneMsg.names)) return doneMsg.names;
+
+        const got = await new Promise((resolve) => {
+          chrome.tabs.sendMessage(tabId, { action: "getGoogleNames" }, resolve);
+        });
+        return got && got.success && Array.isArray(got.names) ? got.names : [];
+      }
+      return Array.isArray(res.names) ? res.names : [];
+    } finally {
+      try {
+        if (doneTimer) clearTimeout(doneTimer);
+        if (onDone) chrome.runtime.onMessage.removeListener(onDone);
+      } catch (e) {
+        /* ignore */
+      }
+      // Close the Google tab after extraction is complete (or timeout fallback),
+      // so it stays open during crawling but doesn't accumulate tabs.
+      try {
+        await chrome.tabs.remove(tabId);
+      } catch (e) {
+        /* ignore */
+      }
+    }
+  }
+
   function showStatus(el, text, kind) {
     if (!el) return;
     el.textContent = text;
@@ -462,6 +554,16 @@
               }
             }
           }
+
+          // Run Google name extraction using the criteria (same as Google button).
+          if (firstnameEl && firstnameEl.value.trim()) {
+            showStatus(statusEl, "Auto Search: running Google name extraction…", "info");
+            const names = await extractGoogleNamesFromCriteria(firstnameEl.value.trim(), criteria);
+            if (Array.isArray(names) && names.length && nameList) {
+              nameList.value = names.join("\n");
+            }
+          }
+
           showStatus(
             statusEl,
             "Auto Search: picked row " + res.row + " (Status → In progress). Criteria: " + criteria,
