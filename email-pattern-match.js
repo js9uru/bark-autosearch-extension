@@ -22,11 +22,18 @@
     return true;
   }
 
-  /** Bark-style: replace entire local with * × length so matching is domain-led. */
+  /**
+   * Bark-style: when the local part is fully obfuscated (only *), replace with
+   * * × length so matching is domain-led. If the user pattern shows any literal
+   * characters in the local part (e.g. s***********9@...), keep it so those
+   * positions still filter candidates.
+   */
   function normalizeBarkLocalStars(pattern) {
     const p = String(pattern || "").trim();
     const at = p.indexOf("@");
     if (at <= 0) return p;
+    const local = p.slice(0, at);
+    if (/[^*]/.test(local)) return p;
     return "*".repeat(at) + p.slice(at);
   }
 
@@ -43,11 +50,19 @@
 
   /**
    * Redacted: inferred local length = prefix.length + redactedLen + suffix.length (suffix = visible between redacted block and @).
-   * Visible indices must match pattern (non-*). Indices inside the redacted run are not checked (length-only).
+   * Visible indices must match pattern (non-*). Indices inside the redacted run are not checked (length-only),
+   * unless hrefEmail is set — then the full pattern is applied to the decoded email so literals (e.g. last digit before @) apply.
    */
   function matchRedactedRow(pattern, o) {
     const parts = splitPattern(pattern);
     if (!parts || !o || o.redacted !== true) return false;
+
+    // ThatsThem attaches the decoded address in hrefEmail. The redacted DOM span
+    // skips verification for the whole masked run, so a visible trailing digit in
+    // the user pattern (e.g. s***********9@...) would not be checked against the
+    // real local part unless we match against the full email here.
+    const href = o.hrefEmail != null ? String(o.hrefEmail).trim() : "";
+    if (href) return matchFullEmail(pattern, href);
 
     const prefix = String(o.prefix || "");
     const suffix = String(o.suffix || "");
