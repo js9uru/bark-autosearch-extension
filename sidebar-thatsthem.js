@@ -240,7 +240,7 @@
     return "https://www.google.com/search?hl=en&gl=us&pws=0&q=" + encodeURIComponent(q);
   }
 
-  async function extractGoogleNamesFromCriteria(firstname, criteria) {
+  async function extractGoogleNamesFromCriteria(firstname, criteria, onProgress) {
     const url = googleSearchUrl(criteria);
     const tab = await chrome.tabs.create({ url, active: false });
     const tabId = tab && tab.id;
@@ -248,6 +248,7 @@
 
     let onDone = null;
     let doneTimer = null;
+    let progressTimer = null;
     const donePromise = new Promise((resolve) => {
       onDone = (msg) => {
         if (msg && msg.action === "googleExtractionComplete") resolve(msg);
@@ -266,6 +267,21 @@
         throw new Error((res && res.error) || "Google extraction failed");
       }
       if (res.navigating) {
+        // Progress updates: read googleExtractionState.pageNum while content script paginates.
+        if (typeof onProgress === "function") {
+          progressTimer = setInterval(() => {
+            try {
+              chrome.storage.local.get(["googleExtractionState"], (st) => {
+                const gs = st && st.googleExtractionState ? st.googleExtractionState : null;
+                const pageNum = gs && typeof gs.pageNum === "number" ? gs.pageNum : null;
+                if (pageNum != null) onProgress({ pageNum });
+              });
+            } catch (e) {
+              /* ignore */
+            }
+          }, 800);
+        }
+
         // Wait for completion signal from the content script (it paginates all pages).
         // Also keep a fallback poll so we can still return partial names if needed.
         const timeoutMs = 180000; // 3 minutes
@@ -284,6 +300,7 @@
     } finally {
       try {
         if (doneTimer) clearTimeout(doneTimer);
+        if (progressTimer) clearInterval(progressTimer);
         if (onDone) chrome.runtime.onMessage.removeListener(onDone);
       } catch (e) {
         /* ignore */
@@ -525,7 +542,27 @@
     }
 
     if (autoSearchSheetBtn) {
+      let autoSearchRunning = false;
+      let autoSearchCancelRequested = false;
+      const autoSearchDefaultLabel = autoSearchSheetBtn.textContent || "Auto Search";
       autoSearchSheetBtn.addEventListener("click", async function () {
+        // Toggle behavior: first click starts, second click requests stop.
+        if (autoSearchRunning) {
+          autoSearchCancelRequested = true;
+          autoSearchSheetBtn.textContent = autoSearchDefaultLabel;
+          showStatus(statusEl, "Auto Search: stop requested…", "info");
+          try {
+            // Best-effort stop signal for ongoing Google extraction (content script watches this flag).
+            chrome.storage.local.set({ stopGoogleExtraction: true });
+          } catch (e) {
+            /* ignore */
+          }
+          return;
+        }
+
+        autoSearchRunning = true;
+        autoSearchCancelRequested = false;
+        autoSearchSheetBtn.textContent = "Stop Auto Search";
         autoSearchSheetBtn.disabled = true;
         try {
           showStatus(statusEl, "Auto Search: checking Google Sheet for Todo…", "info");
@@ -555,10 +592,28 @@
             }
           }
 
+          // Print criteria before the Google extraction status.
+          showStatus(statusEl, "Search criteria:\n" + criteria, "info");
+
           // Run Google name extraction using the criteria (same as Google button).
           if (firstnameEl && firstnameEl.value.trim()) {
-            showStatus(statusEl, "Auto Search: running Google name extraction…", "info");
-            const names = await extractGoogleNamesFromCriteria(firstnameEl.value.trim(), criteria);
+            const setGoogleProgress = (pageNum) => {
+              const pn = pageNum != null ? String(pageNum) : "?";
+              showStatus(
+                statusEl,
+                "Search criteria:\n" +
+                  criteria +
+                  "\n\nAuto Search: running Google name extraction…\nPage: " +
+                  pn,
+                "info"
+              );
+            };
+            setGoogleProgress(1);
+            if (autoSearchCancelRequested) return;
+            const names = await extractGoogleNamesFromCriteria(firstnameEl.value.trim(), criteria, (p) => {
+              if (p && typeof p.pageNum === "number") setGoogleProgress(p.pageNum);
+            });
+            if (autoSearchCancelRequested) return;
             if (Array.isArray(names) && names.length && nameList) {
               nameList.value = names.join("\n");
             }
@@ -572,7 +627,10 @@
         } catch (e) {
           showStatus(statusEl, "Auto Search error: " + (e && e.message ? e.message : String(e)), "error");
         } finally {
+          autoSearchRunning = false;
+          autoSearchCancelRequested = false;
           autoSearchSheetBtn.disabled = false;
+          autoSearchSheetBtn.textContent = autoSearchDefaultLabel;
         }
       });
     }
