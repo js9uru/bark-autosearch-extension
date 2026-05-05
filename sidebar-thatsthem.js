@@ -802,8 +802,32 @@
       let autoSearchEnabled = false; // true while interval mode is enabled
       let stopAfterCurrentCycle = false;
       let autoSearchIntervalId = null;
+      let countdownIntervalId = null;
+      let nextCycleAtMs = null;
       const autoSearchDefaultLabel = autoSearchSheetBtn.textContent || "Auto Search";
       let restoreDisabledState = null;
+
+      function formatCountdown(ms) {
+        const s = Math.max(0, Math.floor(ms / 1000));
+        const mm = String(Math.floor(s / 60)).padStart(2, "0");
+        const ss = String(s % 60).padStart(2, "0");
+        return mm + ":" + ss;
+      }
+
+      function startCountdown() {
+        if (countdownIntervalId) clearInterval(countdownIntervalId);
+        countdownIntervalId = setInterval(() => {
+          if (!autoSearchEnabled || autoSearchRunning || !nextCycleAtMs) return;
+          const remaining = nextCycleAtMs - Date.now();
+          showStatus(statusEl, "Auto Search: next cycle in " + formatCountdown(remaining), "info");
+        }, 1000);
+      }
+
+      function stopCountdown() {
+        if (countdownIntervalId) clearInterval(countdownIntervalId);
+        countdownIntervalId = null;
+        nextCycleAtMs = null;
+      }
 
       function setOtherButtonsDisabled(disabled) {
         const ids = [
@@ -848,7 +872,10 @@
         // Non-overlapping: if a previous cycle is still running, skip this tick.
         if (autoSearchRunning || !autoSearchEnabled) return;
         autoSearchRunning = true;
+        nextCycleAtMs = null;
         try {
+          // Clear previous cycle results before starting a new one.
+          if (resultsEl) resultsEl.innerHTML = "";
           showStatus(statusEl, "Auto Search: checking Google Sheet for Todo…", "info");
           const res = await pickFirstTodoAndMarkInProgress();
           if (!res.picked) {
@@ -965,6 +992,9 @@
             setOtherButtonsDisabled(false);
             autoSearchSheetBtn.textContent = autoSearchDefaultLabel;
             autoSearchSheetBtn.disabled = false;
+            stopCountdown();
+          } else {
+            nextCycleAtMs = Date.now() + 5 * 60 * 1000;
           }
         }
       }
@@ -987,6 +1017,7 @@
         setOtherButtonsDisabled(false);
         autoSearchSheetBtn.textContent = autoSearchDefaultLabel;
         autoSearchSheetBtn.disabled = false;
+        stopCountdown();
         showStatus(statusEl, "Auto Search: stopped.", "info");
       }
 
@@ -1007,9 +1038,11 @@
 
         // Run immediately, then every 5 minutes.
         await runAutoSearchCycle();
+        nextCycleAtMs = Date.now() + 5 * 60 * 1000;
+        startCountdown();
         autoSearchIntervalId = setInterval(function () {
           runAutoSearchCycle();
-        }, 3 * 60 * 1000);
+        }, 5 * 60 * 1000);
       });
     }
 
