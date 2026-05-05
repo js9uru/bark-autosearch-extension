@@ -993,7 +993,7 @@
         await runAutoSearchCycle();
         autoSearchIntervalId = setInterval(function () {
           runAutoSearchCycle();
-        }, 5 * 60 * 1000);
+        }, 3 * 60 * 1000);
       });
     }
 
