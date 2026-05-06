@@ -249,6 +249,52 @@
     return { picked: true, row: pickedRowNumber, range: cellRange, record: rec };
   }
 
+  /** Scan enough rows to find the lead we marked In progress after top inserts may have shifted row numbers. */
+  async function findStatusCellRangeForInProgressLead(token, rec) {
+    const maxRow = Math.max(500, SHEETS_CONFIG.topN + 50);
+    const range =
+      a1QuoteSheetTitle(SHEETS_CONFIG.sheetTab) + "!A1:Z" + String(maxRow);
+    const data = await sheetsValuesGet(token, range);
+    const values = data.values || [];
+    if (!values.length) return null;
+
+    const header = (values[0] || []).map((h) => String(h || "").trim());
+    const statusIdx = header.indexOf(SHEETS_CONFIG.statusColName);
+    if (statusIdx < 0) return null;
+
+    const nameIdx = header.indexOf(SHEETS_CONFIG.nameColName);
+    const locationIdx = header.indexOf(SHEETS_CONFIG.locationColName);
+    const phoneIdx = header.indexOf(SHEETS_CONFIG.phoneColName);
+    const emailIdx = header.indexOf(SHEETS_CONFIG.emailColName);
+
+    const wantStatus = SHEETS_CONFIG.inProgressValue.toLowerCase();
+    const rn = (s) => String(s || "").trim();
+    const rowMatchesRecord = (row) => {
+      const g = (idx) => (idx >= 0 && idx < row.length ? rn(row[idx]) : "");
+      if (nameIdx >= 0 && g(nameIdx) !== rn(rec.name)) return false;
+      if (locationIdx >= 0 && g(locationIdx) !== rn(rec.location)) return false;
+      if (phoneIdx >= 0 && g(phoneIdx) !== rn(rec.phone)) return false;
+      if (emailIdx >= 0 && g(emailIdx) !== rn(rec.email)) return false;
+      return true;
+    };
+
+    const sheetQuoted = a1QuoteSheetTitle(SHEETS_CONFIG.sheetTab);
+    const statusCol = colNumToA1(statusIdx + 1);
+
+    for (let i = 1; i < values.length; i++) {
+      const row = values[i] || [];
+      const st = statusIdx < row.length ? rn(row[statusIdx]).toLowerCase() : "";
+      if (st !== wantStatus) continue;
+      if (!rowMatchesRecord(row)) continue;
+      const sheetRowNum = i + 1;
+      return {
+        range: sheetQuoted + "!" + statusCol + String(sheetRowNum),
+        rowNumber: sheetRowNum,
+      };
+    }
+    return null;
+  }
+
   function localNowString() {
     const d = new Date();
     // Example: 2026-05-06 00:19 GMT+9 (uses the user's local machine timezone)
@@ -967,11 +1013,23 @@
           }
 
           // Update the picked row's Status in the source sheet based on results.
+          // Re-resolve row: new leads may have been inserted at the top since we picked.
+          let statusResolvedRow = null;
           try {
             const sa3 = await loadServiceAccountJson();
             const token3 = await getServiceAccountAccessToken(sa3);
             const statusValue = matched.length > 0 ? SHEETS_CONFIG.foundValue : SHEETS_CONFIG.notFoundValue;
-            await sheetsValuesUpdate(token3, res.range, [[statusValue]]);
+            const resolved = await findStatusCellRangeForInProgressLead(token3, rec);
+            if (!resolved) {
+              showStatus(
+                statusEl,
+                "Auto Search warning: could not find this lead as In progress (sheet changed?). Set Status manually if needed.",
+                "error"
+              );
+            } else {
+              await sheetsValuesUpdate(token3, resolved.range, [[statusValue]]);
+              statusResolvedRow = resolved.rowNumber;
+            }
           } catch (e) {
             showStatus(
               statusEl,
@@ -980,8 +1038,23 @@
             );
           }
 
-          // If ThatsThem finished without showing an error, remind which row was picked.
-          showStatus(statusEl, "Auto Search: finished. Picked row " + res.row + ".", "success");
+          if (statusResolvedRow != null) {
+            showStatus(
+              statusEl,
+              "Auto Search: finished. Status updated at row " +
+                statusResolvedRow +
+                " (initial pick was row " +
+                res.row +
+                ").",
+              "success"
+            );
+          } else {
+            showStatus(
+              statusEl,
+              "Auto Search: finished. Status not updated — initial pick was row " + res.row + ".",
+              "success"
+            );
+          }
         } catch (e) {
           showStatus(statusEl, "Auto Search error: " + (e && e.message ? e.message : String(e)), "error");
         } finally {
