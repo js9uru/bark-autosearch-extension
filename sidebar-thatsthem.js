@@ -442,7 +442,7 @@
     let progressTimer = null;
     const donePromise = new Promise((resolve) => {
       onDone = (msg) => {
-        if (msg && msg.action === "googleExtractionComplete") resolve(msg);
+        if (msg && (msg.action === "googleExtractionComplete" || msg.action === "googleExtractionBlocked")) resolve(msg);
       };
       chrome.runtime.onMessage.addListener(onDone);
     });
@@ -537,6 +537,41 @@
           doneTimer = setTimeout(() => resolve(null), timeoutMs);
         });
         const doneMsg = await Promise.race([donePromise, timeoutPromise]);
+        if (doneMsg && doneMsg.action === "googleExtractionBlocked") {
+          // Manual solve during pagination (Google redirected to /sorry/).
+          shouldCloseTab = false;
+          if (typeof onProgress === "function") onProgress({ blocked: true, pageNum: doneMsg.pageNum || null });
+          try {
+            await chrome.tabs.update(tabId, { active: true });
+          } catch (e) {
+            /* ignore */
+          }
+
+          const startWait = Date.now();
+          const maxWaitMs = 10 * 60 * 1000; // 10 minutes
+          while (Date.now() - startWait < maxWaitMs) {
+            await new Promise((r) => setTimeout(r, 2000));
+            let st = null;
+            try {
+              st = await sendCaptchaStatus();
+            } catch (e) {
+              st = null;
+            }
+            const stillBlocked = st && st.success === true ? st.blocked === true : null;
+            if (stillBlocked === false) {
+              shouldCloseTab = true;
+              res = await sendExtract();
+              break;
+            }
+          }
+          if (res && res.blocked) {
+            throw new Error("Google blocked (captcha/unusual traffic). Timed out waiting for manual solve.");
+          }
+
+          // After solve, wait again for completion (with the same overall timeout window).
+          const doneMsg2 = await Promise.race([donePromise, timeoutPromise]);
+          if (doneMsg2 && Array.isArray(doneMsg2.names)) return doneMsg2.names;
+        }
         if (doneMsg && Array.isArray(doneMsg.names)) return doneMsg.names;
 
         const got = await new Promise((resolve) => {
