@@ -2,7 +2,7 @@
  * ThatsThem name search pages — email and/or phone pattern matching (e.g. /name/Kristen-Johnson/Cheshire-CT).
  */
 (function () {
-  const AUTO_SEARCH_INTERVAL_MINUTES = 3;
+  const AUTO_SEARCH_INTERVAL_MINUTES = 2;
   const AUTO_SEARCH_INTERVAL_MS = AUTO_SEARCH_INTERVAL_MINUTES * 60 * 1000;
   const SHEETS_CONFIG = {
     spreadsheetId: "1rfv9DgxPrUuSQI7P5zYzGa3NEloSVnr-j9Fv3k9ndl4",
