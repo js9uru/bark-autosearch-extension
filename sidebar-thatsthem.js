@@ -944,6 +944,10 @@
             const best = matched[0];
             const allEmails = extractAllEmails(best.data && best.data.emails);
             const allPhones = extractAllPhones(best.data && best.data.phones);
+            const phonePatternForSheet =
+              ((phonePatternEl && phonePatternEl.value.trim()) || String(rec.phone || "")).trim();
+            const phoneCell =
+              allPhones.length > 0 ? allPhones.join("\n") : phonePatternForSheet;
 
             const sa2 = await loadServiceAccountJson();
             const token2 = await getServiceAccountAccessToken(sa2);
@@ -953,7 +957,7 @@
               String(best.name || ""),
               String(rec.service || ""),
               String(loc.display || rec.location || ""),
-              allPhones.join("\n"),
+              phoneCell,
               allEmails.join("\n"),
               String(rec.verifiedPhone || ""),
               String(rec.details || ""),
