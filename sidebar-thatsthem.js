@@ -605,6 +605,33 @@
     el.style.display = "block";
   }
 
+  function notifyContactAdded(opts) {
+    try {
+      if (!chrome || !chrome.notifications || typeof chrome.notifications.create !== "function") return;
+      const name = opts && opts.name ? String(opts.name) : "";
+      const emailCount = opts && typeof opts.emailCount === "number" ? opts.emailCount : null;
+      const phoneCount = opts && typeof opts.phoneCount === "number" ? opts.phoneCount : null;
+      const lines = [];
+      if (emailCount != null) lines.push("Emails: " + String(emailCount));
+      if (phoneCount != null) lines.push("Phones: " + String(phoneCount));
+      const message = lines.length ? lines.join("  •  ") : "Saved to Bark_Contacts";
+
+      chrome.notifications.create(
+        "bark_contacts_added_" + String(Date.now()),
+        {
+          type: "basic",
+          iconUrl: chrome.runtime.getURL("icon.png"),
+          title: "Bark contact added",
+          message: (name ? name + "\n" : "") + message,
+          priority: 1,
+        },
+        () => void 0
+      );
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
   function escapeHtml(s) {
     return String(s)
       .replace(/&/g, "&amp;")
@@ -1103,6 +1130,11 @@
               localNowString(),
             ];
             await insertContactRowAtTop(token2, sheetInfo.sheetId, rowValues);
+            notifyContactAdded({
+              name: String(best.name || ""),
+              emailCount: allEmails.length,
+              phoneCount: allPhones.length,
+            });
           }
 
           // Update the picked row's Status in the source sheet based on results.
