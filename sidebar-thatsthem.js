@@ -467,8 +467,18 @@
       // Ask the content script on the Google SERP to extract names (same as the Google button).
       let res = await sendExtract();
 
-      // Manual solve flow: if blocked, keep tab open and wait for user to solve.
-      if (res && res.blocked) {
+      const getTabUrl = async () =>
+        await new Promise((resolve) => {
+          chrome.tabs.get(tabId, (t) => resolve(t && t.url ? String(t.url) : ""));
+        });
+
+      const looksBlockedUrl = (u) => {
+        const s = String(u || "");
+        return s.includes("google.com/sorry") || s.includes("/sorry/") || s.includes("recaptcha");
+      };
+
+      // Manual solve flow: if blocked (or we can't talk to the page yet), keep tab open and wait for user to solve.
+      if (!res || (res && res.blocked)) {
         shouldCloseTab = false;
         if (typeof onProgress === "function") onProgress({ blocked: true, pageNum: 1 });
         try {
@@ -488,7 +498,9 @@
             st = null;
           }
           const stillBlocked = st && st.success === true ? st.blocked === true : null;
-          if (stillBlocked === false) {
+          const tabUrl = await getTabUrl();
+
+          if (stillBlocked === false || (!looksBlockedUrl(tabUrl) && tabUrl.includes("google.com/search"))) {
             // Solved: restart extraction.
             shouldCloseTab = true;
             res = await sendExtract();
@@ -496,7 +508,7 @@
           }
         }
 
-        if (res && res.blocked) {
+        if (!res || (res && res.blocked)) {
           throw new Error("Google blocked (captcha/unusual traffic). Timed out waiting for manual solve.");
         }
       }

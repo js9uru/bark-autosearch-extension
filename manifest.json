@@ -48,6 +48,7 @@
     {
       "matches": [
         "https://www.google.com/search*",
+        "https://www.google.com/sorry/*",
         "https://www.fastpeoplesearch.com/name*",
         "https://contactout.com/dashboard/search*",
         "https://www.bark.com/sellers/dashboard/*"
