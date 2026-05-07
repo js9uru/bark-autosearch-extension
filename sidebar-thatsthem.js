@@ -6,7 +6,7 @@
   const AUTO_SEARCH_INTERVAL_MS = AUTO_SEARCH_INTERVAL_MINUTES * 60 * 1000;
   const SHEETS_CONFIG = {
     spreadsheetId: "1rfv9DgxPrUuSQI7P5zYzGa3NEloSVnr-j9Fv3k9ndl4",
-    sheetTab: "Bark_Leads",
+    sheetTab: "test",
     topN: 150,
     statusColName: "Status",
     todoValue: "Todo",
@@ -20,7 +20,7 @@
     serviceColName: "Service",
     verifiedPhoneColName: "Verified Phone",
     detailsColName: "Details Q&A",
-    contactsTab: "Bark_Contacts",
+    contactsTab: "test_Contacts",
   };
 
   function firstToken(s) {
@@ -38,13 +38,105 @@
     const raw = String(locationValue || "").trim();
     if (!raw) return { city: "", st: "", zip: "", display: "" };
     const cleaned = raw.replace(/\s*\([^)]*\)\s*/g, " ").replace(/\s{2,}/g, " ").trim();
-    const m = cleaned.match(/^\s*([^,]+?)\s*,\s*([A-Z]{2})\s*,?\s*(\d{5}(?:-\d{4})?)\b/);
+
+    const STATE_TO_ABBREV = {
+      alabama: "AL",
+      alaska: "AK",
+      arizona: "AZ",
+      arkansas: "AR",
+      california: "CA",
+      colorado: "CO",
+      connecticut: "CT",
+      delaware: "DE",
+      florida: "FL",
+      georgia: "GA",
+      hawaii: "HI",
+      idaho: "ID",
+      illinois: "IL",
+      indiana: "IN",
+      iowa: "IA",
+      kansas: "KS",
+      kentucky: "KY",
+      louisiana: "LA",
+      maine: "ME",
+      maryland: "MD",
+      massachusetts: "MA",
+      michigan: "MI",
+      minnesota: "MN",
+      mississippi: "MS",
+      missouri: "MO",
+      montana: "MT",
+      nebraska: "NE",
+      nevada: "NV",
+      "new hampshire": "NH",
+      "new jersey": "NJ",
+      "new mexico": "NM",
+      "new york": "NY",
+      "north carolina": "NC",
+      "north dakota": "ND",
+      ohio: "OH",
+      oklahoma: "OK",
+      oregon: "OR",
+      pennsylvania: "PA",
+      "rhode island": "RI",
+      "south carolina": "SC",
+      "south dakota": "SD",
+      tennessee: "TN",
+      texas: "TX",
+      utah: "UT",
+      vermont: "VT",
+      virginia: "VA",
+      washington: "WA",
+      "west virginia": "WV",
+      wisconsin: "WI",
+      wyoming: "WY",
+      "district of columbia": "DC",
+    };
+
+    const stateToAbbrev = (s) => {
+      const t = String(s || "").trim();
+      if (!t) return "";
+      if (/^[A-Z]{2}$/.test(t)) return t;
+      const k = t.toLowerCase();
+      return STATE_TO_ABBREV[k] || "";
+    };
+
+    // Format: City, ST, ZIP
+    let m = cleaned.match(/^\s*([^,]+?)\s*,\s*([A-Z]{2})\s*,?\s*(\d{5}(?:-\d{4})?)\b/);
     if (m) {
       const city = (m[1] || "").trim();
       const st = (m[2] || "").trim();
       const zip = (m[3] || "").trim();
       return { city, st, zip, display: `${city}, ${st}, ${zip}` };
     }
+
+    // Format: City, StateName, ZIP (rare but support it)
+    m = cleaned.match(/^\s*([^,]+?)\s*,\s*([A-Za-z ]+?)\s*,?\s*(\d{5}(?:-\d{4})?)\b/);
+    if (m) {
+      const city = (m[1] || "").trim();
+      const st = stateToAbbrev(m[2]);
+      const zip = (m[3] || "").trim();
+      const display = st ? `${city}, ${st}, ${zip}` : `${city}, ${m[2].trim()}, ${zip}`;
+      return { city, st: st || "", zip, display };
+    }
+
+    // Format: City, ST
+    m = cleaned.match(/^\s*([^,]+?)\s*,\s*([A-Z]{2})\s*$/);
+    if (m) {
+      const city = (m[1] || "").trim();
+      const st = (m[2] || "").trim();
+      return { city, st, zip: "", display: `${city}, ${st}` };
+    }
+
+    // Format: City, StateName
+    m = cleaned.match(/^\s*([^,]+?)\s*,\s*([A-Za-z ]+?)\s*$/);
+    if (m) {
+      const city = (m[1] || "").trim();
+      const st = stateToAbbrev(m[2]);
+      const display = st ? `${city}, ${st}` : cleaned;
+      return { city, st: st || "", zip: "", display };
+    }
+
     return { city: "", st: "", zip: "", display: cleaned };
   }
 
