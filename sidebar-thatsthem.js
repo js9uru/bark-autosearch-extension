@@ -488,6 +488,26 @@
     await sheetsValuesUpdate(token, a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab) + "!A2", [rowValues]);
   }
 
+  async function insertContactRowsAtTop(token, contactsSheetId, rowsValues) {
+    const rows = Array.isArray(rowsValues) ? rowsValues.filter((r) => Array.isArray(r) && r.length) : [];
+    if (rows.length === 0) return;
+    // Insert N rows at index 1 (i.e. starting at row 2, below header).
+    await sheetsBatchUpdate(token, [
+      {
+        insertDimension: {
+          range: {
+            sheetId: contactsSheetId,
+            dimension: "ROWS",
+            startIndex: 1,
+            endIndex: 1 + rows.length,
+          },
+          inheritFromBefore: false,
+        },
+      },
+    ]);
+    await sheetsValuesUpdate(token, a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab) + "!A2", rows);
+  }
+
   async function waitTabComplete(tabId, timeoutMs) {
     const start = Date.now();
     return await new Promise((resolve, reject) => {
@@ -1199,33 +1219,42 @@
           const matched = (matchResults || []).filter((r) => r && r.matched);
           if (matched.length > 0) {
             showStatus(statusEl, "Auto Search: saving to Bark_Contacts…", "info");
-            const best = matched[0];
-            const allEmails = extractAllEmails(best.data && best.data.emails);
-            const allPhones = extractAllPhones(best.data && best.data.phones);
             const phonePatternForSheet =
               ((phonePatternEl && phonePatternEl.value.trim()) || String(rec.phone || "")).trim();
-            const phoneCell =
-              allPhones.length > 0 ? allPhones.join("\n") : phonePatternForSheet;
 
             const sa2 = await loadServiceAccountJson();
             const token2 = await getServiceAccountAccessToken(sa2);
             const sheetInfo = await ensureContactsSheet(token2);
 
-            const rowValues = [
-              String(best.name || ""),
-              String(rec.service || ""),
-              String(loc.display || rec.location || ""),
-              phoneCell,
-              allEmails.join("\n"),
-              String(rec.verifiedPhone || ""),
-              String(rec.details || ""),
-              localNowString(),
-            ];
-            await insertContactRowAtTop(token2, sheetInfo.sheetId, rowValues);
+            // Preserve matched order as displayed (insert-at-top reverses order),
+            // so we build rows in reverse then insert them in one batch.
+            const rowsValues = [];
+            let totalEmails = 0;
+            let totalPhones = 0;
+            for (let i = matched.length - 1; i >= 0; i--) {
+              const m = matched[i];
+              const allEmails = extractAllEmails(m.data && m.data.emails);
+              const allPhones = extractAllPhones(m.data && m.data.phones);
+              totalEmails += allEmails.length;
+              totalPhones += allPhones.length;
+              const phoneCell = allPhones.length > 0 ? allPhones.join("\n") : phonePatternForSheet;
+              rowsValues.push([
+                String(m.name || ""),
+                String(rec.service || ""),
+                String(loc.display || rec.location || ""),
+                phoneCell,
+                allEmails.join("\n"),
+                String(rec.verifiedPhone || ""),
+                String(rec.details || ""),
+                localNowString(),
+              ]);
+            }
+
+            await insertContactRowsAtTop(token2, sheetInfo.sheetId, rowsValues);
             notifyContactAdded({
-              name: String(best.name || ""),
-              emailCount: allEmails.length,
-              phoneCount: allPhones.length,
+              name: matched.length === 1 ? String(matched[0].name || "") : String(matched.length) + " matches",
+              emailCount: totalEmails,
+              phoneCount: totalPhones,
             });
           }
 
