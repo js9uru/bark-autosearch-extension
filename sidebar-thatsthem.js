@@ -549,48 +549,81 @@
     if (!tabId) throw new Error("Failed to open Google tab");
 
     let shouldCloseTab = true;
-    let onDone = null;
-    let doneTimer = null;
     let progressTimer = null;
-    const donePromise = new Promise((resolve) => {
-      onDone = (msg) => {
-        if (msg && (msg.action === "googleExtractionComplete" || msg.action === "googleExtractionBlocked")) resolve(msg);
-      };
-      chrome.runtime.onMessage.addListener(onDone);
-    });
+    let runtimeWaitListener = null;
+
+    const waitForRuntimeMessage = (allowedActions) => {
+      return new Promise((resolve) => {
+        const fn = (msg) => {
+          if (!msg || allowedActions.indexOf(msg.action) === -1) return;
+          runtimeWaitListener = null;
+          chrome.runtime.onMessage.removeListener(fn);
+          resolve(msg);
+        };
+        runtimeWaitListener = fn;
+        chrome.runtime.onMessage.addListener(fn);
+      });
+    };
+
+    const sendExtract = async (resume) =>
+      await new Promise((resolve) => {
+        chrome.tabs.sendMessage(
+          tabId,
+          {
+            action: "extractNamesGoogle",
+            firstname: String(firstname || "").trim(),
+            resume: !!resume,
+          },
+          resolve
+        );
+      });
+
+    const sendCaptchaStatus = async () =>
+      await new Promise((resolve) => {
+        chrome.tabs.sendMessage(tabId, { action: "googleCaptchaStatus" }, resolve);
+      });
+
+    const getTabUrl = async () =>
+      await new Promise((resolve) => {
+        chrome.tabs.get(tabId, (t) => resolve(t && t.url ? String(t.url) : ""));
+      });
+
+    const looksBlockedUrl = (u) => {
+      const s = String(u || "");
+      return s.includes("google.com/sorry") || s.includes("/sorry/") || s.includes("recaptcha");
+    };
+
+    const stopRequested = async () =>
+      !!(await new Promise((resolve) => {
+        chrome.storage.local.get(["stopGoogleExtraction"], (o) => resolve(o && o.stopGoogleExtraction === true));
+      }));
+
+    /** No time limit — only Stop Google cancels. */
+    const waitCaptchaResolvedForever = async () => {
+      while (true) {
+        if (await stopRequested()) {
+          throw new Error("Google extraction stopped by user");
+        }
+        await new Promise((r) => setTimeout(r, 2000));
+        let st = null;
+        try {
+          st = await sendCaptchaStatus();
+        } catch (e) {
+          st = null;
+        }
+        const stillBlocked = st && st.success === true ? st.blocked === true : null;
+        const tabUrl = await getTabUrl();
+        if (stillBlocked === false) return;
+        if (!looksBlockedUrl(tabUrl) && tabUrl.includes("google.com/search")) return;
+      }
+    };
 
     try {
       await waitTabComplete(tabId, 45000);
 
-      const sendExtract = async () =>
-        await new Promise((resolve) => {
-          chrome.tabs.sendMessage(
-            tabId,
-            { action: "extractNamesGoogle", firstname: String(firstname || "").trim() },
-            resolve
-          );
-        });
+      let res = await sendExtract(false);
 
-      const sendCaptchaStatus = async () =>
-        await new Promise((resolve) => {
-          chrome.tabs.sendMessage(tabId, { action: "googleCaptchaStatus" }, resolve);
-        });
-
-      // Ask the content script on the Google SERP to extract names (same as the Google button).
-      let res = await sendExtract();
-
-      const getTabUrl = async () =>
-        await new Promise((resolve) => {
-          chrome.tabs.get(tabId, (t) => resolve(t && t.url ? String(t.url) : ""));
-        });
-
-      const looksBlockedUrl = (u) => {
-        const s = String(u || "");
-        return s.includes("google.com/sorry") || s.includes("/sorry/") || s.includes("recaptcha");
-      };
-
-      // Manual solve flow: if blocked (or we can't talk to the page yet), keep tab open and wait for user to solve.
-      if (!res || (res && res.blocked)) {
+      if (!res || res.blocked) {
         shouldCloseTab = false;
         if (typeof onProgress === "function") onProgress({ blocked: true, pageNum: 1 });
         try {
@@ -598,110 +631,65 @@
         } catch (e) {
           /* ignore */
         }
-
-        const startWait = Date.now();
-        const maxWaitMs = 10 * 60 * 1000; // 10 minutes
-        while (Date.now() - startWait < maxWaitMs) {
-          await new Promise((r) => setTimeout(r, 2000));
-          let st = null;
-          try {
-            st = await sendCaptchaStatus();
-          } catch (e) {
-            st = null;
-          }
-          const stillBlocked = st && st.success === true ? st.blocked === true : null;
-          const tabUrl = await getTabUrl();
-
-          if (stillBlocked === false || (!looksBlockedUrl(tabUrl) && tabUrl.includes("google.com/search"))) {
-            // Solved: restart extraction.
-            shouldCloseTab = true;
-            res = await sendExtract();
-            break;
-          }
-        }
-
-        if (!res || (res && res.blocked)) {
-          throw new Error("Google blocked (captcha/unusual traffic). Timed out waiting for manual solve.");
-        }
+        await waitCaptchaResolvedForever();
+        shouldCloseTab = true;
+        res = await sendExtract(true);
       }
 
       if (!res || res.success !== true) throw new Error((res && res.error) || "Google extraction failed");
-      if (res.navigating) {
-        // Progress updates: read googleExtractionState.pageNum while content script paginates.
-        if (typeof onProgress === "function") {
-          progressTimer = setInterval(() => {
-            try {
-              chrome.storage.local.get(["googleExtractionState"], (st) => {
-                const gs = st && st.googleExtractionState ? st.googleExtractionState : null;
-                const pageNum = gs && typeof gs.pageNum === "number" ? gs.pageNum : null;
-                if (pageNum != null) onProgress({ pageNum });
-              });
-            } catch (e) {
-              /* ignore */
-            }
-          }, 800);
-        }
 
-        // Wait for completion signal from the content script (it paginates all pages).
-        // Also keep a fallback poll so we can still return partial names if needed.
-        const timeoutMs = 180000; // 3 minutes
-        const timeoutPromise = new Promise((resolve) => {
-          doneTimer = setTimeout(() => resolve(null), timeoutMs);
-        });
-        const doneMsg = await Promise.race([donePromise, timeoutPromise]);
-        if (doneMsg && doneMsg.action === "googleExtractionBlocked") {
-          // Manual solve during pagination (Google redirected to /sorry/).
+      if (!res.navigating) {
+        return Array.isArray(res.names) ? res.names : [];
+      }
+
+      if (typeof onProgress === "function") {
+        progressTimer = setInterval(() => {
+          try {
+            chrome.storage.local.get(["googleExtractionState"], (st) => {
+              const gs = st && st.googleExtractionState ? st.googleExtractionState : null;
+              const pageNum = gs && typeof gs.pageNum === "number" ? gs.pageNum : null;
+              if (pageNum != null) onProgress({ pageNum });
+            });
+          } catch (e) {
+            /* ignore */
+          }
+        }, 800);
+      }
+
+      // No overall time limit: wait until last page + OpenAI, or Stop Google.
+      while (true) {
+        const msg = await waitForRuntimeMessage(["googleExtractionComplete", "googleExtractionBlocked"]);
+        if (msg.action === "googleExtractionBlocked") {
           shouldCloseTab = false;
-          if (typeof onProgress === "function") onProgress({ blocked: true, pageNum: doneMsg.pageNum || null });
+          if (typeof onProgress === "function") onProgress({ blocked: true, pageNum: msg.pageNum || null });
           try {
             await chrome.tabs.update(tabId, { active: true });
           } catch (e) {
             /* ignore */
           }
-
-          const startWait = Date.now();
-          const maxWaitMs = 10 * 60 * 1000; // 10 minutes
-          while (Date.now() - startWait < maxWaitMs) {
-            await new Promise((r) => setTimeout(r, 2000));
-            let st = null;
-            try {
-              st = await sendCaptchaStatus();
-            } catch (e) {
-              st = null;
-            }
-            const stillBlocked = st && st.success === true ? st.blocked === true : null;
-            if (stillBlocked === false) {
-              shouldCloseTab = true;
-              res = await sendExtract();
-              break;
-            }
-          }
-          if (res && res.blocked) {
-            throw new Error("Google blocked (captcha/unusual traffic). Timed out waiting for manual solve.");
-          }
-
-          // After solve, wait again for completion (with the same overall timeout window).
-          const doneMsg2 = await Promise.race([donePromise, timeoutPromise]);
-          if (doneMsg2 && Array.isArray(doneMsg2.names)) return doneMsg2.names;
+          await waitCaptchaResolvedForever();
+          shouldCloseTab = true;
+          await sendExtract(true);
+          continue;
         }
-        if (doneMsg && Array.isArray(doneMsg.names)) return doneMsg.names;
-
-        const got = await new Promise((resolve) => {
-          chrome.tabs.sendMessage(tabId, { action: "getGoogleNames" }, resolve);
-        });
-        return got && got.success && Array.isArray(got.names) ? got.names : [];
+        if (msg.action === "googleExtractionComplete") {
+          return Array.isArray(msg.names) ? msg.names : [];
+        }
       }
-      return Array.isArray(res.names) ? res.names : [];
     } finally {
       try {
-        if (doneTimer) clearTimeout(doneTimer);
         if (progressTimer) clearInterval(progressTimer);
-        if (onDone) chrome.runtime.onMessage.removeListener(onDone);
+        if (runtimeWaitListener) {
+          try {
+            chrome.runtime.onMessage.removeListener(runtimeWaitListener);
+          } catch (e2) {
+            /* ignore */
+          }
+          runtimeWaitListener = null;
+        }
       } catch (e) {
         /* ignore */
       }
-      // Close the Google tab after extraction is complete (or timeout fallback),
-      // so it stays open during crawling but doesn't accumulate tabs.
       try {
         if (shouldCloseTab) await chrome.tabs.remove(tabId);
       } catch (e) {
