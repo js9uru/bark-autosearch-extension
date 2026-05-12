@@ -730,8 +730,23 @@
       }
     };
 
+    const reloadTabOnce = () =>
+      new Promise((resolve, reject) => {
+        chrome.tabs.reload(tabId, { bypassCache: true }, () => {
+          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+          else resolve(undefined);
+        });
+      });
+
     try {
       await waitTabComplete(tabId, 45000);
+      // Second navigation often yields fuller SERP markup than the first paint.
+      try {
+        await reloadTabOnce();
+        await waitTabComplete(tabId, 45000);
+      } catch (e) {
+        console.warn("Google search: reload before extract failed, continuing with first load.", e);
+      }
 
       let res = await sendExtract(false);
 
