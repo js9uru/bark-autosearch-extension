@@ -21,6 +21,7 @@
     verifiedPhoneColName: "Verified Phone",
     detailsColName: "Details Q&A",
     contactsTab: "Bark_Contacts",
+    statisticsTab: "Bark_Statistics",
   };
 
   function firstToken(s) {
@@ -248,6 +249,25 @@
     return await res.json();
   }
 
+  async function sheetsValuesClear(token, rangeA1) {
+    const url =
+      "https://sheets.googleapis.com/v4/spreadsheets/" +
+      encodeURIComponent(SHEETS_CONFIG.spreadsheetId) +
+      "/values/" +
+      encodeURIComponent(rangeA1) +
+      ":clear";
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    });
+    if (!res.ok) throw new Error("Sheets clear failed: " + res.status);
+    return await res.json();
+  }
+
   async function sheetsSpreadsheetGet(token) {
     const url =
       "https://sheets.googleapis.com/v4/spreadsheets/" +
@@ -273,6 +293,89 @@
     });
     if (!res.ok) throw new Error("Sheets batchUpdate failed: " + res.status);
     return await res.json();
+  }
+
+  function parseAddedAtToDateKey(cell) {
+    const s = String(cell || "").trim();
+    if (!s) return null;
+    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return m[1] + "-" + m[2] + "-" + m[3];
+    m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\b/);
+    if (m) {
+      const mo = String(m[1]).padStart(2, "0");
+      const da = String(m[2]).padStart(2, "0");
+      return m[3] + "-" + mo + "-" + da;
+    }
+    return null;
+  }
+
+  function countDatesFromColumnValues(values) {
+    const counts = {};
+    const rows = values || [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i] || [];
+      const key = parseAddedAtToDateKey(row[0]);
+      if (key) counts[key] = (counts[key] || 0) + 1;
+    }
+    return counts;
+  }
+
+  function dateKeyToMDYYYY(key) {
+    const parts = String(key || "").split("-");
+    if (parts.length !== 3) return key;
+    return String(parseInt(parts[1], 10)) + "/" + String(parseInt(parts[2], 10)) + "/" + parts[0];
+  }
+
+  async function ensureStatisticsSheet(token) {
+    const meta = await sheetsSpreadsheetGet(token);
+    const list = (meta && meta.sheets) || [];
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i] && list[i].properties ? list[i].properties : {};
+      if (p.title === SHEETS_CONFIG.statisticsTab) return { sheetId: p.sheetId, created: false };
+    }
+    await sheetsBatchUpdate(token, [
+      { addSheet: { properties: { title: SHEETS_CONFIG.statisticsTab } } },
+    ]);
+    return { created: true };
+  }
+
+  async function refreshBarkStatistics(token) {
+    const leadsRange = a1QuoteSheetTitle(SHEETS_CONFIG.sheetTab) + "!H2:H10000";
+    const contactsRange = a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab) + "!H2:H10000";
+    let leadsValues = [];
+    let contactsValues = [];
+    try {
+      const lr = await sheetsValuesGet(token, leadsRange);
+      leadsValues = lr.values || [];
+    } catch (e) {
+      console.warn("Bark_Statistics: could not read Bark_Leads column H", e);
+    }
+    try {
+      const cr = await sheetsValuesGet(token, contactsRange);
+      contactsValues = cr.values || [];
+    } catch (e) {
+      console.warn("Bark_Statistics: could not read Bark_Contacts column H", e);
+    }
+    const leadCounts = countDatesFromColumnValues(leadsValues);
+    const contactCounts = countDatesFromColumnValues(contactsValues);
+    const allKeys = new Set([].concat(Object.keys(leadCounts), Object.keys(contactCounts)));
+    const sorted = Array.from(allKeys).sort().reverse();
+    const out = [["Date", "Leads", "Founds", "Percent"]];
+    for (let i = 0; i < sorted.length; i++) {
+      const dk = sorted[i];
+      const lc = leadCounts[dk] || 0;
+      const fc = contactCounts[dk] || 0;
+      const pct = lc > 0 ? (100 * fc) / lc : 0;
+      out.push([dateKeyToMDYYYY(dk), lc, fc, pct.toFixed(2) + "%"]);
+    }
+    await ensureStatisticsSheet(token);
+    const statQuoted = a1QuoteSheetTitle(SHEETS_CONFIG.statisticsTab);
+    try {
+      await sheetsValuesClear(token, statQuoted + "!A1:D5000");
+    } catch (e) {
+      console.warn("Bark_Statistics: clear", e);
+    }
+    await sheetsValuesUpdate(token, statQuoted + "!A1", out);
   }
 
   function colNumToA1(n) {
@@ -387,17 +490,16 @@
     return null;
   }
 
-  function localNowString() {
+  /** Same format as bark_monitor_gspread.py: `datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")` */
+  function addedAtUtcString() {
     const d = new Date();
-    // Example: 2026-05-06 00:19 GMT+9 (uses the user's local machine timezone)
     const pad = (n) => String(n).padStart(2, "0");
-    const yyyy = d.getFullYear();
-    const mm = pad(d.getMonth() + 1);
-    const dd = pad(d.getDate());
-    const hh = pad(d.getHours());
-    const mi = pad(d.getMinutes());
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "local";
-    return `${yyyy}-${mm}-${dd} ${hh}:${mi} (${tz})`;
+    const yyyy = d.getUTCFullYear();
+    const mm = pad(d.getUTCMonth() + 1);
+    const dd = pad(d.getUTCDate());
+    const hh = pad(d.getUTCHours());
+    const mi = pad(d.getUTCMinutes());
+    return yyyy + "-" + mm + "-" + dd + " " + hh + ":" + mi + " UTC";
   }
 
   function extractAllEmails(emails) {
@@ -486,6 +588,11 @@
       },
     ]);
     await sheetsValuesUpdate(token, a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab) + "!A2", [rowValues]);
+    try {
+      await refreshBarkStatistics(token);
+    } catch (e) {
+      console.warn("Bark_Statistics refresh failed", e);
+    }
   }
 
   async function insertContactRowsAtTop(token, contactsSheetId, rowsValues) {
@@ -506,6 +613,11 @@
       },
     ]);
     await sheetsValuesUpdate(token, a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab) + "!A2", rows);
+    try {
+      await refreshBarkStatistics(token);
+    } catch (e) {
+      console.warn("Bark_Statistics refresh failed", e);
+    }
   }
 
   async function waitTabComplete(tabId, timeoutMs) {
@@ -1234,7 +1346,7 @@
                 allEmails.join("\n"),
                 String(rec.verifiedPhone || ""),
                 String(rec.details || ""),
-                localNowString(),
+                addedAtUtcString(),
               ]);
             }
 
