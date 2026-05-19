@@ -4,10 +4,11 @@
 (function () {
   const AUTO_SEARCH_INTERVAL_MINUTES = 2;
   const AUTO_SEARCH_INTERVAL_MS = AUTO_SEARCH_INTERVAL_MINUTES * 60 * 1000;
+  const DEFAULT_SHEETS_TOP_N = 150;
   const SHEETS_CONFIG = {
     spreadsheetId: "1rfv9DgxPrUuSQI7P5zYzGa3NEloSVnr-j9Fv3k9ndl4",
     sheetTab: "Bark_Leads",
-    topN: 150,
+    topN: DEFAULT_SHEETS_TOP_N,
     statusColName: "Status",
     todoValue: "Todo",
     inProgressValue: "In progress",
@@ -832,6 +833,36 @@
     el.style.display = "block";
   }
 
+  function storageGet(keys) {
+    return new Promise(function (resolve) {
+      chrome.storage.local.get(keys, function (o) {
+        resolve(o || {});
+      });
+    });
+  }
+
+  function storageSet(obj) {
+    return new Promise(function (resolve) {
+      chrome.storage.local.set(obj, resolve);
+    });
+  }
+
+  function parseSheetsTopN(raw) {
+    const n = parseInt(String(raw), 10);
+    return n > 0 ? n : DEFAULT_SHEETS_TOP_N;
+  }
+
+  function applySheetsTopN(n) {
+    SHEETS_CONFIG.topN = parseSheetsTopN(n);
+    return SHEETS_CONFIG.topN;
+  }
+
+  function loadSheetsTopNFromStorage() {
+    return storageGet(["sheetsTopN"]).then(function (o) {
+      return applySheetsTopN(o.sheetsTopN);
+    });
+  }
+
   function notifyContactAdded(opts) {
     try {
       if (!chrome || !chrome.notifications || typeof chrome.notifications.create !== "function") return;
@@ -1055,6 +1086,59 @@
   }
 
   ready(function () {
+    const sheetsTopNInput = document.getElementById("sheetsTopN");
+    const saveSheetsTopNBtn = document.getElementById("saveSheetsTopN");
+    const sheetsTopNStatusEl = document.getElementById("sheetsTopNStatus");
+
+    function showSheetsTopNStatus(text, kind) {
+      showStatus(sheetsTopNStatusEl, text, kind);
+      if (sheetsTopNStatusEl) {
+        setTimeout(function () {
+          sheetsTopNStatusEl.style.display = "none";
+        }, 3000);
+      }
+    }
+
+    if (sheetsTopNInput) {
+      try {
+        const lsTopN = localStorage.getItem("sheetsTopN");
+        if (lsTopN) applySheetsTopN(lsTopN);
+        sheetsTopNInput.value = String(SHEETS_CONFIG.topN);
+      } catch (e) {
+        /* ignore */
+      }
+      loadSheetsTopNFromStorage().then(function (n) {
+        sheetsTopNInput.value = String(n);
+        try {
+          localStorage.setItem("sheetsTopN", String(n));
+        } catch (e2) {
+          /* ignore */
+        }
+      });
+    }
+
+    if (saveSheetsTopNBtn && sheetsTopNInput) {
+      saveSheetsTopNBtn.addEventListener("click", function () {
+        const raw = sheetsTopNInput.value.trim();
+        const n = parseInt(raw, 10);
+        if (!raw || !Number.isFinite(n) || n < 1) {
+          showSheetsTopNStatus("Enter a whole number at least 1.", "error");
+          return;
+        }
+        const clamped = Math.min(5000, Math.max(1, n));
+        applySheetsTopN(clamped);
+        sheetsTopNInput.value = String(clamped);
+        try {
+          localStorage.setItem("sheetsTopN", String(clamped));
+        } catch (e) {
+          /* ignore */
+        }
+        storageSet({ sheetsTopN: clamped }).then(function () {
+          showSheetsTopNStatus("Top N saved (" + clamped + ").", "success");
+        });
+      });
+    }
+
     const searchThatsThemBtn = document.getElementById("searchThatsThemBtn");
     const stopThatsThemSearch = document.getElementById("stopThatsThemSearch");
     const autoSearchSheetBtn = document.getElementById("autoSearchSheetBtn");
