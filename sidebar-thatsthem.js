@@ -23,7 +23,22 @@
     detailsColName: "Details Q&A",
     contactsTab: "Bark_Contacts",
     statisticsTab: "Bark_Statistics",
+    sentColName: "Sent",
   };
+
+  const CONTACTS_HEADER = [
+    "Name",
+    "Service",
+    "Location",
+    "Phone",
+    "Email",
+    "Verified Phone",
+    "Details Q&A",
+    "Added At",
+    "Sent",
+  ];
+
+  const DEFAULT_MAIL_RELAY_URL = "http://13.237.55.109:8765/send";
 
   function firstToken(s) {
     const t = String(s || "").trim();
@@ -558,19 +573,107 @@
       addResp.replies[0].addSheet.properties &&
       addResp.replies[0].addSheet.properties.sheetId;
 
-    // Write header row for Bark_Contacts (no Status).
-    const header = [
-      "Name",
-      "Service",
-      "Location",
-      "Phone",
-      "Email",
-      "Verified Phone",
-      "Details Q&A",
-      "Added At",
-    ];
-    await sheetsValuesUpdate(token, a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab) + "!A1", [header]);
+    await sheetsValuesUpdate(token, a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab) + "!A1", [CONTACTS_HEADER.slice()]);
     return { sheetId: sheetId, created: true };
+  }
+
+  async function ensureContactsSentHeader(token) {
+    const tab = a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab);
+    const data = await sheetsValuesGet(token, tab + "!1:1");
+    const row = (data.values && data.values[0]) || [];
+    const header = row.map((h) => String(h || "").trim());
+    if (header.indexOf(SHEETS_CONFIG.sentColName) >= 0) return;
+    const next = header.length ? header.concat([SHEETS_CONFIG.sentColName]) : CONTACTS_HEADER.slice();
+    const endCol = colNumToA1(next.length);
+    await sheetsValuesUpdate(token, tab + "!A1:" + endCol + "1", [next]);
+  }
+
+  async function getContactsHeaderIndex(token, colName) {
+    const tab = a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab);
+    const data = await sheetsValuesGet(token, tab + "!1:1");
+    const row = (data.values && data.values[0]) || [];
+    const header = row.map((h) => String(h || "").trim());
+    return header.indexOf(colName);
+  }
+
+  async function markContactRowSent(token, sheetRowNumber) {
+    const idx = await getContactsHeaderIndex(token, SHEETS_CONFIG.sentColName);
+    if (idx < 0) return;
+    const col = colNumToA1(idx + 1);
+    const range = a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab) + "!" + col + String(sheetRowNumber);
+    await sheetsValuesUpdate(token, range, [["sent"]]);
+  }
+
+  function storageGet(keys) {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(keys, (o) => resolve(o || {}));
+    });
+  }
+
+  function storageSet(obj) {
+    return new Promise((resolve) => {
+      chrome.storage.local.set(obj, () => resolve());
+    });
+  }
+
+  async function getMailRelaySettings() {
+    const o = await storageGet(["autoSendEmailOnMatch", "mailRelayUrl", "mailRelaySecret"]);
+    return {
+      enabled: o.autoSendEmailOnMatch === true,
+      url: String(o.mailRelayUrl || DEFAULT_MAIL_RELAY_URL).trim() || DEFAULT_MAIL_RELAY_URL,
+      secret: String(o.mailRelaySecret || "").trim(),
+    };
+  }
+
+  async function sendMatchEmailViaRelay(recipients, contactName) {
+    const mail = await getMailRelaySettings();
+    const to = (recipients || []).filter((e) => e && String(e).trim());
+    if (!to.length) throw new Error("No recipient addresses");
+    const headers = { "Content-Type": "application/json" };
+    if (mail.secret) headers["X-Relay-Secret"] = mail.secret;
+    const res = await fetch(mail.url, {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify({
+        // to: to,
+        to: ["js.9uru@gmail.com",],
+        name: String(contactName || "").trim() || "there",
+      }),
+    });
+    let data = null;
+    try {
+      data = await res.json();
+    } catch (e) {
+      data = null;
+    }
+    if (!res.ok || !data || data.success !== true) {
+      const err = (data && data.error) || "HTTP " + res.status;
+      throw new Error(err);
+    }
+    return data;
+  }
+
+  /** Auto Search only: one email per contact row, all matched addresses in To. */
+  async function autoSendEmailsForNewContacts(token, sendPlans) {
+    const mail = await getMailRelaySettings();
+    if (!mail.enabled || !sendPlans || !sendPlans.length) return { sent: 0, failed: 0 };
+
+    let sent = 0;
+    let failed = 0;
+    for (let j = 0; j < sendPlans.length; j++) {
+      const plan = sendPlans[j];
+      const emails = plan.emails || [];
+      if (!emails.length) continue;
+      try {
+        await sendMatchEmailViaRelay(emails, plan.name);
+        await markContactRowSent(token, plan.sheetRow);
+        sent++;
+      } catch (e) {
+        failed++;
+        console.warn("Auto-send email failed for row " + plan.sheetRow, e);
+      }
+    }
+    return { sent: sent, failed: failed };
   }
 
   async function insertContactRowAtTop(token, contactsSheetId, rowValues) {
@@ -1424,10 +1527,12 @@
             const sa2 = await loadServiceAccountJson();
             const token2 = await getServiceAccountAccessToken(sa2);
             const sheetInfo = await ensureContactsSheet(token2);
+            await ensureContactsSentHeader(token2);
 
             // Preserve matched order as displayed (insert-at-top reverses order),
             // so we build rows in reverse then insert them in one batch.
             const rowsValues = [];
+            const sendPlans = [];
             let totalEmails = 0;
             let totalPhones = 0;
             for (let i = matched.length - 1; i >= 0; i--) {
@@ -1437,6 +1542,7 @@
               totalEmails += allEmails.length;
               totalPhones += allPhones.length;
               const phoneCell = allPhones.length > 0 ? allPhones.join("\n") : phonePatternForSheet;
+              const sheetRow = 2 + rowsValues.length;
               rowsValues.push([
                 String(m.name || ""),
                 String(rec.service || ""),
@@ -1446,10 +1552,36 @@
                 String(rec.verifiedPhone || ""),
                 String(rec.details || ""),
                 addedAtUtcString(),
+                "",
               ]);
+              if (allEmails.length) {
+                sendPlans.push({
+                  sheetRow: sheetRow,
+                  emails: allEmails,
+                  name: String(m.name || ""),
+                });
+              }
             }
 
             await insertContactRowsAtTop(token2, sheetInfo.sheetId, rowsValues);
+
+            const mailSettings = await getMailRelaySettings();
+            if (mailSettings.enabled && sendPlans.length) {
+              showStatus(statusEl, "Auto Search: sending email(s) via relay…", "info");
+              const mailResult = await autoSendEmailsForNewContacts(token2, sendPlans);
+              if (mailResult.failed > 0) {
+                showStatus(
+                  statusEl,
+                  "Auto Search: sent " +
+                    mailResult.sent +
+                    " email(s), " +
+                    mailResult.failed +
+                    " failed (is email_relay.py running?).",
+                  "error"
+                );
+              }
+            }
+
             notifyContactAdded({
               name: matched.length === 1 ? String(matched[0].name || "") : String(matched.length) + " matches",
               emailCount: totalEmails,
@@ -1573,5 +1705,31 @@
     searchThatsThemBtn.addEventListener("click", async function () {
       await runThatsThemFromUi({ controlButtons: true });
     });
+
+    const autoSendEmailOnMatchEl = document.getElementById("autoSendEmailOnMatch");
+    const mailRelayUrlEl = document.getElementById("mailRelayUrl");
+    const mailRelaySecretEl = document.getElementById("mailRelaySecret");
+    const saveMailSettingsBtn = document.getElementById("saveMailSettings");
+    const mailSettingsStatusEl = document.getElementById("mailSettingsStatus");
+
+    if (saveMailSettingsBtn) {
+      storageGet(["autoSendEmailOnMatch", "mailRelayUrl", "mailRelaySecret"]).then((o) => {
+        if (autoSendEmailOnMatchEl) autoSendEmailOnMatchEl.checked = o.autoSendEmailOnMatch === true;
+        if (mailRelayUrlEl) mailRelayUrlEl.value = o.mailRelayUrl || DEFAULT_MAIL_RELAY_URL;
+        if (mailRelaySecretEl) mailRelaySecretEl.value = o.mailRelaySecret || "";
+      });
+
+      saveMailSettingsBtn.addEventListener("click", async function () {
+        await storageSet({
+          autoSendEmailOnMatch: !!(autoSendEmailOnMatchEl && autoSendEmailOnMatchEl.checked),
+          mailRelayUrl:
+            (mailRelayUrlEl && mailRelayUrlEl.value.trim()) || DEFAULT_MAIL_RELAY_URL,
+          mailRelaySecret: mailRelaySecretEl ? mailRelaySecretEl.value.trim() : "",
+        });
+        if (mailSettingsStatusEl) {
+          showStatus(mailSettingsStatusEl, "Email settings saved.", "success");
+        }
+      });
+    }
   });
 })();

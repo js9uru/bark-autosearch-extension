@@ -18,7 +18,8 @@
     "https://www.unite4heritage.org/*",
     "https://thatsthem.com/*",
     "https://oauth2.googleapis.com/*",
-    "https://sheets.googleapis.com/*"
+    "https://sheets.googleapis.com/*",
+    "http://13.237.55.109:8765/*"
   ],
   "background": {
     "service_worker": "background.js"
