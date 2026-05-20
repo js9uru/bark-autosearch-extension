@@ -33,7 +33,7 @@ Security note: keep `service_account.json` local only (it is ignored by `.gitign
 
 ### Settings (OpenAI key)
 
-Go to the extension **Settings** tab and save your OpenAI API key. This is required for the **Google** name extraction.
+Go to the extension **Settings** tab, enter your OpenAI API key, and click **Save settings**. This is required for the **Google** name extraction.
 
 ### Auto Search (how it works)
 

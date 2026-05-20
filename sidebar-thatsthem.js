@@ -1353,16 +1353,28 @@
 
   ready(function () {
     const sheetsTopNInput = document.getElementById("sheetsTopN");
-    const saveSheetsTopNBtn = document.getElementById("saveSheetsTopN");
-    const sheetsTopNStatusEl = document.getElementById("sheetsTopNStatus");
+    const settingsStatusEl = document.getElementById("settingsStatus");
+    const apiKeyEl = document.getElementById("apiKey");
+    const saveSettingsBtn = document.getElementById("saveSettings");
+    const autoSendEmailOnMatchEl = document.getElementById("autoSendEmailOnMatch");
+    const mailRelayUrlEl = document.getElementById("mailRelayUrl");
+    const mailRelaySecretEl = document.getElementById("mailRelaySecret");
+    const emailGenerationModelEl = document.getElementById("emailGenerationModel");
 
-    function showSheetsTopNStatus(text, kind) {
-      showStatus(sheetsTopNStatusEl, text, kind);
-      if (sheetsTopNStatusEl) {
+    function showSettingsSaveStatus(text, kind) {
+      showStatus(settingsStatusEl, text, kind);
+      if (settingsStatusEl) {
         setTimeout(function () {
-          sheetsTopNStatusEl.style.display = "none";
-        }, 3000);
+          settingsStatusEl.style.display = "none";
+        }, 5000);
       }
+    }
+
+    function updateMailRelayFieldsEnabled() {
+      const on = !!(autoSendEmailOnMatchEl && autoSendEmailOnMatchEl.checked);
+      if (mailRelayUrlEl) mailRelayUrlEl.disabled = !on;
+      if (mailRelaySecretEl) mailRelaySecretEl.disabled = !on;
+      if (emailGenerationModelEl) emailGenerationModelEl.disabled = !on;
     }
 
     if (sheetsTopNInput) {
@@ -1383,25 +1395,59 @@
       });
     }
 
-    if (saveSheetsTopNBtn && sheetsTopNInput) {
-      saveSheetsTopNBtn.addEventListener("click", function () {
-        const raw = sheetsTopNInput.value.trim();
-        const n = parseInt(raw, 10);
-        if (!raw || !Number.isFinite(n) || n < 1) {
-          showSheetsTopNStatus("Enter a whole number at least 1.", "error");
-          return;
+    storageGet(["autoSendEmailOnMatch", "mailRelayUrl", "mailRelaySecret", "emailGenerationModel"]).then(function (o) {
+      if (autoSendEmailOnMatchEl) autoSendEmailOnMatchEl.checked = o.autoSendEmailOnMatch === true;
+      if (mailRelayUrlEl) mailRelayUrlEl.value = o.mailRelayUrl || DEFAULT_MAIL_RELAY_URL;
+      if (mailRelaySecretEl) mailRelaySecretEl.value = o.mailRelaySecret || "";
+      if (emailGenerationModelEl) {
+        emailGenerationModelEl.value = o.emailGenerationModel || DEFAULT_EMAIL_MODEL;
+      }
+      updateMailRelayFieldsEnabled();
+    });
+
+    if (autoSendEmailOnMatchEl) {
+      autoSendEmailOnMatchEl.addEventListener("change", updateMailRelayFieldsEnabled);
+    }
+
+    if (saveSettingsBtn) {
+      saveSettingsBtn.addEventListener("click", async function () {
+        if (sheetsTopNInput) {
+          const raw = sheetsTopNInput.value.trim();
+          const n = parseInt(raw, 10);
+          if (!raw || !Number.isFinite(n) || n < 1) {
+            showSettingsSaveStatus("Top N: enter a whole number at least 1.", "error");
+            return;
+          }
+          const clamped = Math.min(5000, Math.max(1, n));
+          applySheetsTopN(clamped);
+          sheetsTopNInput.value = String(clamped);
+          try {
+            localStorage.setItem("sheetsTopN", String(clamped));
+          } catch (e) {
+            /* ignore */
+          }
+          await storageSet({ sheetsTopN: clamped });
         }
-        const clamped = Math.min(5000, Math.max(1, n));
-        applySheetsTopN(clamped);
-        sheetsTopNInput.value = String(clamped);
-        try {
-          localStorage.setItem("sheetsTopN", String(clamped));
-        } catch (e) {
-          /* ignore */
+
+        const key = apiKeyEl ? apiKeyEl.value.trim() : "";
+        if (key) {
+          try {
+            localStorage.setItem("apiKey", key);
+          } catch (e) {
+            /* ignore */
+          }
+          await storageSet({ apiKey: key });
         }
-        storageSet({ sheetsTopN: clamped }).then(function () {
-          showSheetsTopNStatus("Top N saved (" + clamped + ").", "success");
+
+        await storageSet({
+          autoSendEmailOnMatch: !!(autoSendEmailOnMatchEl && autoSendEmailOnMatchEl.checked),
+          mailRelayUrl: (mailRelayUrlEl && mailRelayUrlEl.value.trim()) || DEFAULT_MAIL_RELAY_URL,
+          mailRelaySecret: mailRelaySecretEl ? mailRelaySecretEl.value.trim() : "",
+          emailGenerationModel:
+            (emailGenerationModelEl && emailGenerationModelEl.value.trim()) || DEFAULT_EMAIL_MODEL,
         });
+
+        showSettingsSaveStatus("Settings saved.", "success");
       });
     }
 
@@ -1874,37 +1920,5 @@
     searchThatsThemBtn.addEventListener("click", async function () {
       await runThatsThemFromUi({ controlButtons: true });
     });
-
-    const autoSendEmailOnMatchEl = document.getElementById("autoSendEmailOnMatch");
-    const mailRelayUrlEl = document.getElementById("mailRelayUrl");
-    const mailRelaySecretEl = document.getElementById("mailRelaySecret");
-    const emailGenerationModelEl = document.getElementById("emailGenerationModel");
-    const saveMailSettingsBtn = document.getElementById("saveMailSettings");
-    const mailSettingsStatusEl = document.getElementById("mailSettingsStatus");
-
-    if (saveMailSettingsBtn) {
-      storageGet(["autoSendEmailOnMatch", "mailRelayUrl", "mailRelaySecret", "emailGenerationModel"]).then((o) => {
-        if (autoSendEmailOnMatchEl) autoSendEmailOnMatchEl.checked = o.autoSendEmailOnMatch === true;
-        if (mailRelayUrlEl) mailRelayUrlEl.value = o.mailRelayUrl || DEFAULT_MAIL_RELAY_URL;
-        if (mailRelaySecretEl) mailRelaySecretEl.value = o.mailRelaySecret || "";
-        if (emailGenerationModelEl) {
-          emailGenerationModelEl.value = o.emailGenerationModel || DEFAULT_EMAIL_MODEL;
-        }
-      });
-
-      saveMailSettingsBtn.addEventListener("click", async function () {
-        await storageSet({
-          autoSendEmailOnMatch: !!(autoSendEmailOnMatchEl && autoSendEmailOnMatchEl.checked),
-          mailRelayUrl:
-            (mailRelayUrlEl && mailRelayUrlEl.value.trim()) || DEFAULT_MAIL_RELAY_URL,
-          mailRelaySecret: mailRelaySecretEl ? mailRelaySecretEl.value.trim() : "",
-          emailGenerationModel:
-            (emailGenerationModelEl && emailGenerationModelEl.value.trim()) || DEFAULT_EMAIL_MODEL,
-        });
-        if (mailSettingsStatusEl) {
-          showStatus(mailSettingsStatusEl, "Email settings saved.", "success");
-        }
-      });
-    }
   });
 })();

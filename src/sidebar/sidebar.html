@@ -184,14 +184,11 @@
         </div>
 
         <div class="form-group">
-          <button id="saveApiKey" class="btn btn-primary">Save API Key</button>
-          <button id="toggleApiKeyVisibility" class="btn"
+          <button type="button" id="toggleApiKeyVisibility" class="btn"
             style="margin-top: 8px; background-color: #6c757d; color: white;">
             Show / Hide API Key
           </button>
         </div>
-
-        <div id="apiKeyStatus" class="status" style="display: none;"></div>
 
         <div class="form-group" style="margin-top: 20px;">
           <label for="sheetsTopN">Bark_Leads rows to scan (top N):</label>
@@ -199,11 +196,6 @@
           <small class="form-hint">Auto Search reads only the first N data rows below the header when picking a Todo lead.</small>
         </div>
 
-        <div class="form-group">
-          <button id="saveSheetsTopN" class="btn btn-primary">Save top N</button>
-        </div>
-
-        <div id="sheetsTopNStatus" class="status" style="display: none;"></div>
       </div>
 
       <div class="form-section" style="margin-top: 20px;">
@@ -224,26 +216,26 @@
 
         <div class="form-group">
           <label for="mailRelayUrl">Mail relay URL:</label>
-          <input type="text" id="mailRelayUrl" placeholder="http://127.0.0.1:8765/send" autocomplete="off">
+          <input type="text" id="mailRelayUrl" placeholder="http://127.0.0.1:8765/send" autocomplete="off" disabled>
         </div>
 
         <div class="form-group">
           <label for="mailRelaySecret">Relay secret (optional):</label>
-          <input type="password" id="mailRelaySecret" placeholder="Same as MAIL_RELAY_SECRET in .env" autocomplete="off">
+          <input type="password" id="mailRelaySecret" placeholder="Same as MAIL_RELAY_SECRET in .env" autocomplete="off" disabled>
           <small class="form-hint">Leave blank if MAIL_RELAY_SECRET is not set on the relay.</small>
         </div>
 
         <div class="form-group">
           <label for="emailGenerationModel">Email generation model:</label>
-          <input type="text" id="emailGenerationModel" placeholder="gpt-4o-mini" autocomplete="off">
+          <input type="text" id="emailGenerationModel" placeholder="gpt-4o-mini" autocomplete="off" disabled>
           <small class="form-hint">OpenAI model for auto-send subject and body (uses your Settings API key).</small>
         </div>
 
-        <div class="form-group">
-          <button id="saveMailSettings" class="btn btn-primary">Save email settings</button>
+        <div class="form-group" style="margin-top: 8px;">
+          <button type="button" id="saveSettings" class="btn btn-primary">Save settings</button>
         </div>
 
-        <div id="mailSettingsStatus" class="status" style="display: none;"></div>
+        <div id="settingsStatus" class="status" style="display: none;"></div>
       </div>
     </div>
 
@@ -282,14 +274,14 @@
             <li>Visit <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI Platform</a></li>
             <li>Sign in or create an account</li>
             <li>Create a new API key</li>
-            <li>Copy the key and paste it in the Settings page</li>
+            <li>Copy the key, paste it on the Settings page, and click <strong>Save settings</strong></li>
           </ol>
         </div>
 
         <div class="help-section">
           <h3>Usage Instructions</h3>
           <ol class="help-list">
-            <li>Go to the <strong>Settings</strong> page and enter your OpenAI API key</li>
+            <li>Go to the <strong>Settings</strong> page, enter your OpenAI API key, then click <strong>Save settings</strong></li>
             <li>Fill in the search parameters (First Name, Email Pattern, City, State) or click "Apply Data from Bark" to apply data from Bark dashboard</li>
             <li>Navigate to a Google, ContactOut, or FastPeopleSearch page</li>
             <li>Click the appropriate extract button (Google, CO, or FPS)</li>
