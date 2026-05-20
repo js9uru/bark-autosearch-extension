@@ -658,6 +658,34 @@
     return serviceToRolePhrase(service) + " with " + OUTREACH_COMPANY;
   }
 
+  /** Subject line: e.g. "Structural Engineering Services in Watertown" */
+  function serviceToSubjectServicePhrase(service) {
+    const s = String(service || "").trim();
+    if (s === "Architectural Services") return "Architectural Services";
+    if (s === "Structural Engineer") return "Structural Engineering Services";
+    if (s === "Residential Interior Designers" || s === "Commercial Interior Designers") {
+      return "Interior Design Services";
+    }
+    if (s) {
+      if (/services$/i.test(s)) return s;
+      return s + " Services";
+    }
+    return "Professional Services";
+  }
+
+  function buildOutreachEmailSubject(lead) {
+    const phrase = serviceToSubjectServicePhrase(lead && lead.service);
+    const loc = normalizeLocationCityStateZip((lead && lead.location) || "");
+    let city = (loc.city || "").trim();
+    if (!city) {
+      const raw = String((lead && lead.location) || "").trim();
+      const beforeComma = raw.split(",")[0] || "";
+      city = beforeComma.replace(/\s*\([^)]*\)\s*/g, " ").trim();
+    }
+    if (!city) city = "your area";
+    return phrase + " in " + city;
+  }
+
   function parseOpenAiJsonContent(content) {
     let text = String(content || "").trim();
     const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -672,6 +700,8 @@
     const contactFirstName = firstToken(contactFullName) || "there";
     const roleIntro = buildRoleIntro(lead && lead.service);
     const model = await getEmailGenerationModel();
+
+    const subject = buildOutreachEmailSubject(lead);
 
     const userPayload = {
       contactFirstName: contactFirstName,
@@ -702,15 +732,18 @@
               OUTREACH_COMPANY +
               ". " +
               "The goal is to introduce Thomas and respond to a Bark.com service request. " +
-              'Return valid JSON only with keys "subject" and "body". ' +
-              "subject: one concise line, no quotes. " +
-              "body: plain text, friendly and short (about 3-5 sentences). " +
-              "Address the recipient by contactFirstName. " +
-              "Mention that Thomas is the roleIntro provided. " +
-              "Reference relevant details from the Bark Q&A when helpful. " +
-              "End the body with exactly these two lines:\nBest regards,\n" +
+              'Return valid JSON only with key "body" (no subject — subject is set separately). ' +
+              "body rules — plain text only, friendly and short:\n" +
+              "1) First line: Hi <first name>, — use contactFirstName from the user JSON. Then one blank line.\n" +
+              "2) Next paragraph (single line): start with I'm " +
               OUTREACH_SENDER +
-              "\nDo not add phone, website, HTML, or a signature block.",
+              ", then a comma and a space, then paste the exact roleIntro string from the user JSON.\n" +
+              "3) After that intro line, put one blank line (\\n\\n) before each following paragraph. " +
+              "Use 2–4 short paragraphs: acknowledge their Bark request, offer help, brief CTA. " +
+              "Do not run those into one wall of text; each paragraph is separated by \\n\\n from the next.\n" +
+              "4) After the last body paragraph, one blank line, then exactly:\nBest regards,\\n" +
+              OUTREACH_SENDER +
+              "\n5) No phone, website, HTML, or extra signature.",
           },
           {
             role: "user",
@@ -734,9 +767,8 @@
     const data = await res.json();
     const content = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
     const parsed = parseOpenAiJsonContent(content);
-    const subject = String(parsed.subject || "").trim();
     const body = String(parsed.body || "").trim();
-    if (!subject || !body) throw new Error("OpenAI returned empty subject or body");
+    if (!body) throw new Error("OpenAI returned empty body");
     return { subject: subject, body: body };
   }
 

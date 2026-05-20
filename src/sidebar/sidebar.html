@@ -210,7 +210,7 @@
         <h3>Auto-send email (ThatsThem match)</h3>
         <p class="form-hint" style="margin-bottom: 10px;">
           Run <code>python email_relay.py</code> in <code>bark-leads-scraper</code> with Gmail SMTP in <code>.env</code>.
-          During <strong>Auto Search</strong>, when a ThatsThem email match is found, OpenAI drafts a short outreach email from the picked Bark row (service, location, Q&amp;A) and sends it via the relay.
+          During <strong>Auto Search</strong>, when a ThatsThem email match is found, OpenAI drafts the email body from the picked Bark row (service, location, Q&amp;A). The <strong>subject</strong> is built as <em>… Services in [city]</em> (e.g. Architectural Services in Milpitas). Sends via the relay.
         </p>
 
         <div class="form-group">
