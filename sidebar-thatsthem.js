@@ -693,6 +693,17 @@
     return JSON.parse(text);
   }
 
+  function personalizeEmailGreeting(body, contactFullName) {
+    const name = firstToken(contactFullName) || "there";
+    const text = String(body || "");
+    const lines = text.split("\n");
+    if (lines.length > 0 && /^Hi\s+.+,?\s*$/i.test(lines[0].trim())) {
+      lines[0] = "Hi " + name + ",";
+      return lines.join("\n");
+    }
+    return text;
+  }
+
   async function generateOutreachEmail(lead, contactFullName) {
     const apiKey = await getOpenAiApiKey();
     if (!apiKey) throw new Error("OpenAI API key not set in Settings");
@@ -801,34 +812,48 @@
     return data;
   }
 
-  /** Auto Search only: one email per contact row, all matched addresses in To. */
+  /** Auto Search only: one OpenAI draft per cycle; same subject/body reused for each match. */
   async function autoSendEmailsForNewContacts(token, sendPlans, statusEl) {
     const mail = await getMailRelaySettings();
     if (!mail.enabled || !sendPlans || !sendPlans.length) return { sent: 0, failed: 0 };
 
+    const plansWithEmail = sendPlans.filter(function (p) {
+      return p.emails && p.emails.length;
+    });
+    if (!plansWithEmail.length) return { sent: 0, failed: 0 };
+
+    let generated = null;
+    try {
+      if (statusEl) {
+        showStatus(
+          statusEl,
+          "Auto Search: drafting email (OpenAI) for " + plansWithEmail.length + " match(es)…",
+          "info"
+        );
+      }
+      const first = plansWithEmail[0];
+      generated = await generateOutreachEmail(first.lead || {}, first.name);
+    } catch (e) {
+      console.warn("Auto-send email generation failed", e);
+      return { sent: 0, failed: plansWithEmail.length };
+    }
+
     let sent = 0;
     let failed = 0;
-    for (let j = 0; j < sendPlans.length; j++) {
-      const plan = sendPlans[j];
+    for (let j = 0; j < plansWithEmail.length; j++) {
+      const plan = plansWithEmail[j];
       const emails = plan.emails || [];
       if (!emails.length) continue;
       try {
         if (statusEl) {
           showStatus(
             statusEl,
-            "Auto Search: drafting email " + (j + 1) + "/" + sendPlans.length + " (OpenAI)…",
+            "Auto Search: sending email " + (j + 1) + "/" + plansWithEmail.length + "…",
             "info"
           );
         }
-        const generated = await generateOutreachEmail(plan.lead || {}, plan.name);
-        if (statusEl) {
-          showStatus(
-            statusEl,
-            "Auto Search: sending email " + (j + 1) + "/" + sendPlans.length + "…",
-            "info"
-          );
-        }
-        await sendMatchEmailViaRelay(emails, firstToken(plan.name), generated.subject, generated.body);
+        const body = personalizeEmailGreeting(generated.body, plan.name);
+        await sendMatchEmailViaRelay(emails, firstToken(plan.name), generated.subject, body);
         await markContactRowSent(token, plan.sheetRow);
         sent++;
       } catch (e) {
