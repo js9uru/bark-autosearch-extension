@@ -39,6 +39,9 @@
   ];
 
   const DEFAULT_MAIL_RELAY_URL = "http://13.237.55.109:8765/send";
+  const DEFAULT_EMAIL_MODEL = "gpt-4o-mini";
+  const OUTREACH_COMPANY = "Pinnacle Engineering, Inc.";
+  const OUTREACH_SENDER = "Thomas Vadnais";
 
   function firstToken(s) {
     const t = String(s || "").trim();
@@ -625,7 +628,119 @@
     };
   }
 
-  async function sendMatchEmailViaRelay(recipients, contactName) {
+  async function getOpenAiApiKey() {
+    let key = "";
+    try {
+      key = localStorage.getItem("apiKey") || "";
+    } catch (e) {
+      /* ignore */
+    }
+    if (key.trim()) return key.trim();
+    const o = await storageGet(["apiKey"]);
+    return String(o.apiKey || "").trim();
+  }
+
+  async function getEmailGenerationModel() {
+    const o = await storageGet(["emailGenerationModel"]);
+    const model = String(o.emailGenerationModel || DEFAULT_EMAIL_MODEL).trim();
+    return model || DEFAULT_EMAIL_MODEL;
+  }
+
+  function serviceToRolePhrase(service) {
+    const s = String(service || "").trim();
+    if (s === "Architectural Services") return "a Senior Architect";
+    if (s === "Structural Engineer") return "a Structural Engineer";
+    if (s === "Residential Interior Designers" || s === "Commercial Interior Designers") return "an Interior Designer";
+    return "a professional";
+  }
+
+  function buildRoleIntro(service) {
+    return serviceToRolePhrase(service) + " with " + OUTREACH_COMPANY;
+  }
+
+  function parseOpenAiJsonContent(content) {
+    let text = String(content || "").trim();
+    const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fence) text = fence[1].trim();
+    return JSON.parse(text);
+  }
+
+  async function generateOutreachEmail(lead, contactFullName) {
+    const apiKey = await getOpenAiApiKey();
+    if (!apiKey) throw new Error("OpenAI API key not set in Settings");
+
+    const contactFirstName = firstToken(contactFullName) || "there";
+    const roleIntro = buildRoleIntro(lead && lead.service);
+    const model = await getEmailGenerationModel();
+
+    const userPayload = {
+      contactFirstName: contactFirstName,
+      roleIntro: roleIntro,
+      service: String((lead && lead.service) || "").trim(),
+      location: String((lead && lead.location) || "").trim(),
+      detailsQa: String((lead && lead.details) || "").trim(),
+      barkClientName: String((lead && lead.barkName) || "").trim(),
+    };
+
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + apiKey,
+      },
+      body: JSON.stringify({
+        model: model,
+        temperature: 0.7,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content:
+              "You write short, friendly outreach emails for " +
+              OUTREACH_SENDER +
+              " at " +
+              OUTREACH_COMPANY +
+              ". " +
+              "The goal is to introduce Thomas and respond to a Bark.com service request. " +
+              'Return valid JSON only with keys "subject" and "body". ' +
+              "subject: one concise line, no quotes. " +
+              "body: plain text, friendly and short (about 3-5 sentences). " +
+              "Address the recipient by contactFirstName. " +
+              "Mention that Thomas is the roleIntro provided. " +
+              "Reference relevant details from the Bark Q&A when helpful. " +
+              "End the body with exactly these two lines:\nBest regards,\n" +
+              OUTREACH_SENDER +
+              "\nDo not add phone, website, HTML, or a signature block.",
+          },
+          {
+            role: "user",
+            content: JSON.stringify(userPayload),
+          },
+        ],
+      }),
+    });
+
+    if (!res.ok) {
+      let errText = "OpenAI request failed (" + res.status + ")";
+      try {
+        const errBody = await res.json();
+        if (errBody && errBody.error && errBody.error.message) errText = errBody.error.message;
+      } catch (e) {
+        /* ignore */
+      }
+      throw new Error(errText);
+    }
+
+    const data = await res.json();
+    const content = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+    const parsed = parseOpenAiJsonContent(content);
+    const subject = String(parsed.subject || "").trim();
+    const body = String(parsed.body || "").trim();
+    if (!subject || !body) throw new Error("OpenAI returned empty subject or body");
+    return { subject: subject, body: body };
+  }
+
+  async function sendMatchEmailViaRelay(recipients, contactName, subject, body) {
     const mail = await getMailRelaySettings();
     const to = (recipients || []).filter((e) => e && String(e).trim());
     if (!to.length) throw new Error("No recipient addresses");
@@ -635,9 +750,10 @@
       method: "POST",
       headers: headers,
       body: JSON.stringify({
-        // to: to,
-        to: ["js.9uru@gmail.com",],
+        to: to,
         name: String(contactName || "").trim() || "there",
+        subject: String(subject || "").trim(),
+        body: String(body || "").trim(),
       }),
     });
     let data = null;
@@ -654,7 +770,7 @@
   }
 
   /** Auto Search only: one email per contact row, all matched addresses in To. */
-  async function autoSendEmailsForNewContacts(token, sendPlans) {
+  async function autoSendEmailsForNewContacts(token, sendPlans, statusEl) {
     const mail = await getMailRelaySettings();
     if (!mail.enabled || !sendPlans || !sendPlans.length) return { sent: 0, failed: 0 };
 
@@ -665,7 +781,22 @@
       const emails = plan.emails || [];
       if (!emails.length) continue;
       try {
-        await sendMatchEmailViaRelay(emails, plan.name);
+        if (statusEl) {
+          showStatus(
+            statusEl,
+            "Auto Search: drafting email " + (j + 1) + "/" + sendPlans.length + " (OpenAI)…",
+            "info"
+          );
+        }
+        const generated = await generateOutreachEmail(plan.lead || {}, plan.name);
+        if (statusEl) {
+          showStatus(
+            statusEl,
+            "Auto Search: sending email " + (j + 1) + "/" + sendPlans.length + "…",
+            "info"
+          );
+        }
+        await sendMatchEmailViaRelay(emails, firstToken(plan.name), generated.subject, generated.body);
         await markContactRowSent(token, plan.sheetRow);
         sent++;
       } catch (e) {
@@ -1559,6 +1690,12 @@
                   sheetRow: sheetRow,
                   emails: allEmails,
                   name: String(m.name || ""),
+                  lead: {
+                    barkName: String(rec.name || ""),
+                    service: String(rec.service || ""),
+                    location: String(loc.display || rec.location || ""),
+                    details: String(rec.details || ""),
+                  },
                 });
               }
             }
@@ -1567,8 +1704,8 @@
 
             const mailSettings = await getMailRelaySettings();
             if (mailSettings.enabled && sendPlans.length) {
-              showStatus(statusEl, "Auto Search: sending email(s) via relay…", "info");
-              const mailResult = await autoSendEmailsForNewContacts(token2, sendPlans);
+              showStatus(statusEl, "Auto Search: generating and sending email(s)…", "info");
+              const mailResult = await autoSendEmailsForNewContacts(token2, sendPlans, statusEl);
               if (mailResult.failed > 0) {
                 showStatus(
                   statusEl,
@@ -1709,14 +1846,18 @@
     const autoSendEmailOnMatchEl = document.getElementById("autoSendEmailOnMatch");
     const mailRelayUrlEl = document.getElementById("mailRelayUrl");
     const mailRelaySecretEl = document.getElementById("mailRelaySecret");
+    const emailGenerationModelEl = document.getElementById("emailGenerationModel");
     const saveMailSettingsBtn = document.getElementById("saveMailSettings");
     const mailSettingsStatusEl = document.getElementById("mailSettingsStatus");
 
     if (saveMailSettingsBtn) {
-      storageGet(["autoSendEmailOnMatch", "mailRelayUrl", "mailRelaySecret"]).then((o) => {
+      storageGet(["autoSendEmailOnMatch", "mailRelayUrl", "mailRelaySecret", "emailGenerationModel"]).then((o) => {
         if (autoSendEmailOnMatchEl) autoSendEmailOnMatchEl.checked = o.autoSendEmailOnMatch === true;
         if (mailRelayUrlEl) mailRelayUrlEl.value = o.mailRelayUrl || DEFAULT_MAIL_RELAY_URL;
         if (mailRelaySecretEl) mailRelaySecretEl.value = o.mailRelaySecret || "";
+        if (emailGenerationModelEl) {
+          emailGenerationModelEl.value = o.emailGenerationModel || DEFAULT_EMAIL_MODEL;
+        }
       });
 
       saveMailSettingsBtn.addEventListener("click", async function () {
@@ -1725,6 +1866,8 @@
           mailRelayUrl:
             (mailRelayUrlEl && mailRelayUrlEl.value.trim()) || DEFAULT_MAIL_RELAY_URL,
           mailRelaySecret: mailRelaySecretEl ? mailRelaySecretEl.value.trim() : "",
+          emailGenerationModel:
+            (emailGenerationModelEl && emailGenerationModelEl.value.trim()) || DEFAULT_EMAIL_MODEL,
         });
         if (mailSettingsStatusEl) {
           showStatus(mailSettingsStatusEl, "Email settings saved.", "success");

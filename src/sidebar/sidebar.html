@@ -210,7 +210,7 @@
         <h3>Auto-send email (ThatsThem match)</h3>
         <p class="form-hint" style="margin-bottom: 10px;">
           Run <code>python email_relay.py</code> in <code>bark-leads-scraper</code> with Gmail SMTP in <code>.env</code>.
-          Sends only during <strong>Auto Search</strong> when a matching email is found.
+          During <strong>Auto Search</strong>, when a ThatsThem email match is found, OpenAI drafts a short outreach email from the picked Bark row (service, location, Q&amp;A) and sends it via the relay.
         </p>
 
         <div class="form-group">
@@ -231,6 +231,12 @@
           <label for="mailRelaySecret">Relay secret (optional):</label>
           <input type="password" id="mailRelaySecret" placeholder="Same as MAIL_RELAY_SECRET in .env" autocomplete="off">
           <small class="form-hint">Leave blank if MAIL_RELAY_SECRET is not set on the relay.</small>
+        </div>
+
+        <div class="form-group">
+          <label for="emailGenerationModel">Email generation model:</label>
+          <input type="text" id="emailGenerationModel" placeholder="gpt-4o-mini" autocomplete="off">
+          <small class="form-hint">OpenAI model for auto-send subject and body (uses your Settings API key).</small>
         </div>
 
         <div class="form-group">

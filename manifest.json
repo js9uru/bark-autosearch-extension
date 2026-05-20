@@ -19,6 +19,7 @@
     "https://thatsthem.com/*",
     "https://oauth2.googleapis.com/*",
     "https://sheets.googleapis.com/*",
+    "https://api.openai.com/*",
     "http://13.237.55.109:8765/*"
   ],
   "background": {
