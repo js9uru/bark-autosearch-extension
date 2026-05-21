@@ -49,6 +49,66 @@
     return t.split(/\s+/)[0] || "";
   }
 
+  /** First name from picked Bark row for "Hi …," — empty if value does not look like a person name. */
+  function greetingFirstNameFromBarkRow(barkName) {
+    const first = firstToken(barkName);
+    if (!first) return "";
+    const lower = first.toLowerCase();
+    const blocked = {
+      na: 1,
+      "n/a": 1,
+      unknown: 1,
+      none: 1,
+      test: 1,
+      todo: 1,
+      client: 1,
+      customer: 1,
+      homeowner: 1,
+      owner: 1,
+      remote: 1,
+      online: 1,
+    };
+    if (blocked[lower]) return "";
+    if (/\d/.test(first)) return "";
+    if (first.length < 2 || first.length > 24) return "";
+    if (!/^[A-Za-z][A-Za-z'.-]*$/.test(first)) return "";
+    return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+  }
+
+  function applyEmailGreeting(body, greetingFirstName) {
+    const lines = String(body || "").split("\n");
+    if (!lines.length) return String(body || "");
+    const name = String(greetingFirstName || "").trim();
+    lines[0] = name ? "Hi " + name + "," : "Hi,";
+    return lines.join("\n");
+  }
+
+  /** One send per unique address; sheetRows lists every Bark_Contacts row that had that email. */
+  function collectUniqueEmailSendBatches(sendPlans) {
+    const byNorm = new Map();
+    for (let i = 0; i < sendPlans.length; i++) {
+      const plan = sendPlans[i];
+      const sheetRow = plan.sheetRow;
+      const list = plan.emails || [];
+      for (let j = 0; j < list.length; j++) {
+        const raw = String(list[j] || "").trim();
+        if (!raw) continue;
+        const norm = raw.toLowerCase();
+        let entry = byNorm.get(norm);
+        if (!entry) {
+          entry = { email: raw, sheetRows: new Set() };
+          byNorm.set(norm, entry);
+        }
+        entry.sheetRows.add(sheetRow);
+      }
+    }
+    const out = [];
+    byNorm.forEach(function (entry) {
+      out.push({ email: entry.email, sheetRows: entry.sheetRows });
+    });
+    return out;
+  }
+
   function areaCodePrefix(phoneValue) {
     const digits = String(phoneValue || "").replace(/\D/g, "");
     return digits.length >= 3 ? digits.slice(0, 3) + "-" : "";
@@ -525,16 +585,24 @@
     const arr = Array.isArray(emails) ? emails : [];
     const out = [];
     const seen = new Set();
-    for (let i = 0; i < arr.length; i++) {
-      const x = arr[i];
-      let v = "";
-      if (typeof x === "string") v = x.trim();
-      else if (x && typeof x === "object" && x.redacted === true && x.hrefEmail) v = String(x.hrefEmail).trim();
-      if (!v) continue;
+
+    function addEmail(raw) {
+      const v = String(raw || "").trim();
+      if (!v || v.indexOf("@") < 0) return;
       const k = v.toLowerCase();
-      if (seen.has(k)) continue;
+      if (seen.has(k)) return;
       seen.add(k);
       out.push(v);
+    }
+
+    for (let i = 0; i < arr.length; i++) {
+      const x = arr[i];
+      if (typeof x === "string") {
+        const parts = x.split(/[\n,;]+/);
+        for (let j = 0; j < parts.length; j++) addEmail(parts[j]);
+      } else if (x && typeof x === "object" && x.redacted === true && x.hrefEmail) {
+        addEmail(x.hrefEmail);
+      }
     }
     return out;
   }
@@ -600,8 +668,12 @@
   }
 
   async function markContactRowSent(token, sheetRowNumber) {
-    const idx = await getContactsHeaderIndex(token, SHEETS_CONFIG.sentColName);
-    if (idx < 0) return;
+    let idx = await getContactsHeaderIndex(token, SHEETS_CONFIG.sentColName);
+    if (idx < 0) idx = CONTACTS_HEADER.indexOf(SHEETS_CONFIG.sentColName);
+    if (idx < 0) {
+      console.warn("markContactRowSent: Sent column not found in Bark_Contacts header");
+      return;
+    }
     const col = colNumToA1(idx + 1);
     const range = a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab) + "!" + col + String(sheetRowNumber);
     await sheetsValuesUpdate(token, range, [["sent"]]);
@@ -690,32 +762,26 @@
     let text = String(content || "").trim();
     const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
     if (fence) text = fence[1].trim();
-    return JSON.parse(text);
-  }
-
-  function personalizeEmailGreeting(body, contactFullName) {
-    const name = firstToken(contactFullName) || "there";
-    const text = String(body || "");
-    const lines = text.split("\n");
-    if (lines.length > 0 && /^Hi\s+.+,?\s*$/i.test(lines[0].trim())) {
-      lines[0] = "Hi " + name + ",";
-      return lines.join("\n");
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      throw new Error("OpenAI returned invalid JSON for email body");
     }
-    return text;
   }
 
-  async function generateOutreachEmail(lead, contactFullName) {
+  async function generateOutreachEmail(lead) {
     const apiKey = await getOpenAiApiKey();
     if (!apiKey) throw new Error("OpenAI API key not set in Settings");
 
-    const contactFirstName = firstToken(contactFullName) || "there";
+    const greetingFirstName = greetingFirstNameFromBarkRow(lead && lead.barkName);
     const roleIntro = buildRoleIntro(lead && lead.service);
     const model = await getEmailGenerationModel();
 
     const subject = buildOutreachEmailSubject(lead);
 
     const userPayload = {
-      contactFirstName: contactFirstName,
+      greetingFirstName: greetingFirstName,
+      greetingLine: greetingFirstName ? "Hi " + greetingFirstName + "," : "Hi,",
       roleIntro: roleIntro,
       service: String((lead && lead.service) || "").trim(),
       location: String((lead && lead.location) || "").trim(),
@@ -745,7 +811,7 @@
               "The goal is to introduce Thomas and respond to a Bark.com service request. " +
               'Return valid JSON only with key "body" (no subject — subject is set separately). ' +
               "body rules — plain text only, friendly and short:\n" +
-              "1) First line: Hi <first name>, — use contactFirstName from the user JSON. Then one blank line.\n" +
+              "1) First line must be exactly greetingLine from the user JSON (Hi <name>, or Hi, if no name). Then one blank line.\n" +
               "2) Next paragraph (single line): start with I'm " +
               OUTREACH_SENDER +
               ", then a comma and a space, then paste the exact roleIntro string from the user JSON.\n" +
@@ -778,8 +844,9 @@
     const data = await res.json();
     const content = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
     const parsed = parseOpenAiJsonContent(content);
-    const body = String(parsed.body || "").trim();
+    let body = String(parsed.body || "").trim();
     if (!body) throw new Error("OpenAI returned empty body");
+    body = applyEmailGreeting(body, greetingFirstName);
     return { subject: subject, body: body };
   }
 
@@ -812,7 +879,7 @@
     return data;
   }
 
-  /** Auto Search only: one OpenAI draft per cycle; same subject/body reused for each match. */
+  /** Auto Search: one OpenAI draft per cycle; one SMTP send per unique email address. */
   async function autoSendEmailsForNewContacts(token, sendPlans, statusEl) {
     const mail = await getMailRelaySettings();
     if (!mail.enabled || !sendPlans || !sendPlans.length) return { sent: 0, failed: 0 };
@@ -822,43 +889,48 @@
     });
     if (!plansWithEmail.length) return { sent: 0, failed: 0 };
 
+    const batches = collectUniqueEmailSendBatches(plansWithEmail);
+    if (!batches.length) return { sent: 0, failed: 0 };
+
+    const leadForEmail = (plansWithEmail[0] && plansWithEmail[0].lead) || {};
     let generated = null;
     try {
       if (statusEl) {
         showStatus(
           statusEl,
-          "Auto Search: drafting email (OpenAI) for " + plansWithEmail.length + " match(es)…",
+          "Auto Search: drafting email (OpenAI) for " + batches.length + " unique address(es)…",
           "info"
         );
       }
-      const first = plansWithEmail[0];
-      generated = await generateOutreachEmail(first.lead || {}, first.name);
+      generated = await generateOutreachEmail(leadForEmail);
     } catch (e) {
       console.warn("Auto-send email generation failed", e);
-      return { sent: 0, failed: plansWithEmail.length };
+      return { sent: 0, failed: batches.length };
     }
+
+    const relayName = greetingFirstNameFromBarkRow(leadForEmail.barkName) || "";
 
     let sent = 0;
     let failed = 0;
-    for (let j = 0; j < plansWithEmail.length; j++) {
-      const plan = plansWithEmail[j];
-      const emails = plan.emails || [];
-      if (!emails.length) continue;
+    for (let j = 0; j < batches.length; j++) {
+      const batch = batches[j];
       try {
         if (statusEl) {
           showStatus(
             statusEl,
-            "Auto Search: sending email " + (j + 1) + "/" + plansWithEmail.length + "…",
+            "Auto Search: sending email " + (j + 1) + "/" + batches.length + "…",
             "info"
           );
         }
-        const body = personalizeEmailGreeting(generated.body, plan.name);
-        await sendMatchEmailViaRelay(emails, firstToken(plan.name), generated.subject, body);
-        await markContactRowSent(token, plan.sheetRow);
+        await sendMatchEmailViaRelay([batch.email], relayName, generated.subject, generated.body);
+        const rowsToMark = Array.from(batch.sheetRows);
+        for (let r = 0; r < rowsToMark.length; r++) {
+          await markContactRowSent(token, rowsToMark[r]);
+        }
         sent++;
       } catch (e) {
         failed++;
-        console.warn("Auto-send email failed for row " + plan.sheetRow, e);
+        console.warn("Auto-send email failed for " + batch.email, e);
       }
     }
     return { sent: sent, failed: failed };
@@ -1808,15 +1880,39 @@
             const mailSettings = await getMailRelaySettings();
             if (mailSettings.enabled && sendPlans.length) {
               showStatus(statusEl, "Auto Search: generating and sending email(s)…", "info");
-              const mailResult = await autoSendEmailsForNewContacts(token2, sendPlans, statusEl);
-              if (mailResult.failed > 0) {
+              try {
+                const mailResult = await autoSendEmailsForNewContacts(token2, sendPlans, statusEl);
+                if (mailResult.sent > 0 && mailResult.failed === 0) {
+                  showStatus(
+                    statusEl,
+                    "Auto Search: sent " + mailResult.sent + " email(s); Bark_Contacts marked sent.",
+                    "success"
+                  );
+                } else if (mailResult.sent > 0 && mailResult.failed > 0) {
+                  showStatus(
+                    statusEl,
+                    "Auto Search: sent " +
+                      mailResult.sent +
+                      " email(s), " +
+                      mailResult.failed +
+                      " failed (check relay / console).",
+                    "error"
+                  );
+                } else if (mailResult.failed > 0) {
+                  showStatus(
+                    statusEl,
+                    "Auto Search: email send failed (" +
+                      mailResult.failed +
+                      "). Is email_relay.py running? Check Settings relay URL.",
+                    "error"
+                  );
+                }
+              } catch (mailErr) {
+                console.warn("Auto-send email error", mailErr);
                 showStatus(
                   statusEl,
-                  "Auto Search: sent " +
-                    mailResult.sent +
-                    " email(s), " +
-                    mailResult.failed +
-                    " failed (is email_relay.py running?).",
+                  "Auto Search: email send error: " +
+                    (mailErr && mailErr.message ? mailErr.message : String(mailErr)),
                   "error"
                 );
               }
