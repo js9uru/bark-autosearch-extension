@@ -1074,11 +1074,38 @@
     return "https://www.google.com/search?hl=en&gl=us&pws=0&q=" + encodeURIComponent(q);
   }
 
+  function storageGetLocal(keys) {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(keys, (o) => resolve(o || {}));
+    });
+  }
+
+  async function pollGoogleExtractionDone(sinceMs) {
+    const since = typeof sinceMs === "number" ? sinceMs : 0;
+    while (true) {
+      const st = await storageGetLocal(["googleExtractionDone"]);
+      const done = st.googleExtractionDone;
+      if (done && typeof done.at === "number" && done.at >= since) {
+        return {
+          action: "googleExtractionComplete",
+          names: Array.isArray(done.names) ? done.names : [],
+          pageCount: done.pageCount,
+        };
+      }
+      await new Promise((r) => setTimeout(r, 800));
+    }
+  }
+
   async function extractGoogleNamesFromCriteria(firstname, criteria, onProgress) {
     const url = googleSearchUrl(criteria);
     const tab = await chrome.tabs.create({ url, active: false });
     const tabId = tab && tab.id;
     if (!tabId) throw new Error("Failed to open Google tab");
+
+    const extractionStartedAt = Date.now();
+    await new Promise((resolve) => {
+      chrome.storage.local.set({ googleExtractionDone: null }, resolve);
+    });
 
     let shouldCloseTab = true;
     let progressTimer = null;
@@ -1203,9 +1230,12 @@
         }, 800);
       }
 
-      // No overall time limit: wait until last page + OpenAI, or Stop Google.
+      // Wait until last page finishes. Poll storage as fallback if runtime message is missed.
       while (true) {
-        const msg = await waitForRuntimeMessage(["googleExtractionComplete", "googleExtractionBlocked"]);
+        const msg = await Promise.race([
+          waitForRuntimeMessage(["googleExtractionComplete", "googleExtractionBlocked"]),
+          pollGoogleExtractionDone(extractionStartedAt),
+        ]);
         if (msg.action === "googleExtractionBlocked") {
           shouldCloseTab = false;
           if (typeof onProgress === "function") onProgress({ blocked: true, pageNum: msg.pageNum || null });
@@ -1629,7 +1659,10 @@
     }
 
     async function runThatsThemFromUi(opts) {
-      if (thatsThemRunning) return;
+      if (thatsThemRunning) {
+        showStatus(statusEl, "ThatsThem is already running — wait for it to finish.", "error");
+        return [];
+      }
       thatsThemRunning = true;
       const options = opts || {};
       const controlButtons = options.controlButtons !== false; // default true
@@ -1868,7 +1901,7 @@
           // Fill sidebar fields so you can run Search ThatsThem immediately.
           const fullName = String(rec.name || "").trim();
           const googleMatchToken = firstToken(fullName);
-          if (firstnameEl) firstnameEl.value = fullName;
+          if (firstnameEl) firstnameEl.value = googleMatchToken || fullName;
           if (cityEl && loc.city) cityEl.value = loc.city;
           if (emailPatternEl && rec.email) emailPatternEl.value = rec.email;
           if (phonePatternEl && rec.phone) phonePatternEl.value = rec.phone;
@@ -1901,11 +1934,35 @@
               );
             };
             setGoogleProgress(1);
-            const names = await extractGoogleNamesFromCriteria(googleMatchToken, criteria, (p) => {
-              if (p && typeof p.pageNum === "number") setGoogleProgress(p.pageNum);
-            });
-            if (Array.isArray(names) && names.length && nameList) {
-              nameList.value = names.join("\n");
+            try {
+              const names = await extractGoogleNamesFromCriteria(googleMatchToken, criteria, (p) => {
+                if (p && typeof p.pageNum === "number") setGoogleProgress(p.pageNum);
+              });
+              if (Array.isArray(names) && names.length && nameList) {
+                nameList.value = names.join("\n");
+              } else if (nameList && !String(nameList.value || "").trim()) {
+                showStatus(
+                  statusEl,
+                  "Auto Search: Google finished with no extracted names; using lead name for ThatsThem.",
+                  "info"
+                );
+              }
+            } catch (googleErr) {
+              const partial = await storageGetLocal(["googleCurrentNames"]);
+              const partialNames = Array.isArray(partial.googleCurrentNames) ? partial.googleCurrentNames : [];
+              if (partialNames.length && nameList) {
+                nameList.value = partialNames.join("\n");
+                showStatus(
+                  statusEl,
+                  "Auto Search: Google error, continuing with " +
+                    partialNames.length +
+                    " name(s) collected so far. " +
+                    (googleErr && googleErr.message ? googleErr.message : String(googleErr)),
+                  "error"
+                );
+              } else {
+                throw googleErr;
+              }
             }
           }
 
