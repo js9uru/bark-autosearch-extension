@@ -936,6 +936,62 @@
     return { sent: sent, failed: failed };
   }
 
+  function buildBarkContactRowFromMatch(m, rec, loc, phonePatternForSheet) {
+    const allEmails = extractAllEmails(m.data && m.data.emails);
+    const allPhones = extractAllPhones(m.data && m.data.phones);
+    const phoneCell = allPhones.length > 0 ? allPhones.join("\n") : String(phonePatternForSheet || "").trim();
+    const rowValues = [
+      String(m.name || ""),
+      String(rec.service || ""),
+      String(loc.display || rec.location || ""),
+      phoneCell,
+      allEmails.join("\n"),
+      String(rec.verifiedPhone || ""),
+      String(rec.details || ""),
+      addedAtUtcString(),
+      "",
+    ];
+    return { rowValues: rowValues, allEmails: allEmails, allPhones: allPhones };
+  }
+
+  /** Save one ThatsThem match to Bark_Contacts and notify immediately (Auto Search). */
+  async function persistThatsThemMatchToBarkContacts(m, ctx) {
+    if (!ctx.token) {
+      const sa = await loadServiceAccountJson();
+      ctx.token = await getServiceAccountAccessToken(sa);
+    }
+    if (!ctx.sheetInfo) {
+      ctx.sheetInfo = await ensureContactsSheet(ctx.token);
+      await ensureContactsSentHeader(ctx.token);
+    }
+    const rec = ctx.rec || {};
+    const loc = ctx.loc || normalizeLocationCityStateZip(rec.location);
+    const built = buildBarkContactRowFromMatch(m, rec, loc, ctx.phonePatternForSheet);
+    await insertContactRowAtTop(ctx.token, ctx.sheetInfo.sheetId, built.rowValues);
+    notifyContactAdded({
+      name: String(m.name || ""),
+      emailCount: built.allEmails.length,
+      phoneCount: built.allPhones.length,
+    });
+    if (ctx.mailSettings && ctx.mailSettings.enabled && built.allEmails.length) {
+      const sendPlans = [
+        {
+          sheetRow: 2,
+          emails: built.allEmails,
+          name: String(m.name || ""),
+          lead: {
+            barkName: String(rec.name || ""),
+            service: String(rec.service || ""),
+            location: String(loc.display || rec.location || ""),
+            details: String(rec.details || ""),
+          },
+        },
+      ];
+      return autoSendEmailsForNewContacts(ctx.token, sendPlans, ctx.statusEl);
+    }
+    return { sent: 0, failed: 0 };
+  }
+
   async function insertContactRowAtTop(token, contactsSheetId, rowValues) {
     // Insert one row at index 1 (i.e. row 2, below header).
     await sheetsBatchUpdate(token, [
@@ -1652,7 +1708,42 @@
               matched: m.matched,
             };
             results.push(row);
-            if (row.matched) appendResult(resultsEl, row);
+            if (row.matched) {
+              appendResult(resultsEl, row);
+              if (options.persistOnMatch && options.contactsCtx) {
+                try {
+                  showStatus(statusEl, "Match found: saving to Bark_Contacts…", "info");
+                  const mailResult = await persistThatsThemMatchToBarkContacts(row, options.contactsCtx);
+                  row.persisted = true;
+                  if (mailResult && mailResult.sent > 0 && options.contactsCtx.statusEl) {
+                    showStatus(
+                      options.contactsCtx.statusEl,
+                      "Match saved; sent " + mailResult.sent + " email(s).",
+                      mailResult.failed > 0 ? "error" : "success"
+                    );
+                  } else if (mailResult && mailResult.failed > 0 && options.contactsCtx.statusEl) {
+                    showStatus(
+                      options.contactsCtx.statusEl,
+                      "Match saved; email send failed (check relay / console).",
+                      "error"
+                    );
+                  }
+                } catch (persistErr) {
+                  console.warn("Bark_Contacts save failed", persistErr);
+                  showStatus(
+                    statusEl,
+                    "Match found but save failed: " +
+                      (persistErr && persistErr.message ? persistErr.message : String(persistErr)),
+                    "error"
+                  );
+                }
+                if (options.stopAfterFirstMatch) {
+                  stopThatsThem = true;
+                  showStatus(statusEl, "ThatsThem: first match saved, stopping search.", "success");
+                  break;
+                }
+              }
+            }
           } catch (e) {
             /* next */
           }
@@ -1821,108 +1912,33 @@
           // After Google finishes populating the names list, run the same matching logic
           // as clicking "Search ThatsThem".
           showStatus(statusEl, "Auto Search: running ThatsThem matching…", "info");
-          const matchResults = await runThatsThemFromUi({ controlButtons: false });
+          const phonePatternForSheet =
+            ((phonePatternEl && phonePatternEl.value.trim()) || String(rec.phone || "")).trim();
+          const mailSettings = await getMailRelaySettings();
+          const contactsCtx = {
+            rec: rec,
+            loc: loc,
+            phonePatternForSheet: phonePatternForSheet,
+            mailSettings: mailSettings,
+            statusEl: statusEl,
+            token: null,
+            sheetInfo: null,
+          };
+          const matchResults = await runThatsThemFromUi({
+            controlButtons: false,
+            persistOnMatch: true,
+            stopAfterFirstMatch: true,
+            contactsCtx: contactsCtx,
+          });
 
-          // If we found any matches, add a row to Bark_Contacts at the top.
           const matched = (matchResults || []).filter((r) => r && r.matched);
-          if (matched.length > 0) {
-            showStatus(statusEl, "Auto Search: saving to Bark_Contacts…", "info");
-            const phonePatternForSheet =
-              ((phonePatternEl && phonePatternEl.value.trim()) || String(rec.phone || "")).trim();
-
-            const sa2 = await loadServiceAccountJson();
-            const token2 = await getServiceAccountAccessToken(sa2);
-            const sheetInfo = await ensureContactsSheet(token2);
-            await ensureContactsSentHeader(token2);
-
-            // Preserve matched order as displayed (insert-at-top reverses order),
-            // so we build rows in reverse then insert them in one batch.
-            const rowsValues = [];
-            const sendPlans = [];
-            let totalEmails = 0;
-            let totalPhones = 0;
-            for (let i = matched.length - 1; i >= 0; i--) {
-              const m = matched[i];
-              const allEmails = extractAllEmails(m.data && m.data.emails);
-              const allPhones = extractAllPhones(m.data && m.data.phones);
-              totalEmails += allEmails.length;
-              totalPhones += allPhones.length;
-              const phoneCell = allPhones.length > 0 ? allPhones.join("\n") : phonePatternForSheet;
-              const sheetRow = 2 + rowsValues.length;
-              rowsValues.push([
-                String(m.name || ""),
-                String(rec.service || ""),
-                String(loc.display || rec.location || ""),
-                phoneCell,
-                allEmails.join("\n"),
-                String(rec.verifiedPhone || ""),
-                String(rec.details || ""),
-                addedAtUtcString(),
-                "",
-              ]);
-              if (allEmails.length) {
-                sendPlans.push({
-                  sheetRow: sheetRow,
-                  emails: allEmails,
-                  name: String(m.name || ""),
-                  lead: {
-                    barkName: String(rec.name || ""),
-                    service: String(rec.service || ""),
-                    location: String(loc.display || rec.location || ""),
-                    details: String(rec.details || ""),
-                  },
-                });
-              }
-            }
-
-            await insertContactRowsAtTop(token2, sheetInfo.sheetId, rowsValues);
-
-            const mailSettings = await getMailRelaySettings();
-            if (mailSettings.enabled && sendPlans.length) {
-              showStatus(statusEl, "Auto Search: generating and sending email(s)…", "info");
-              try {
-                const mailResult = await autoSendEmailsForNewContacts(token2, sendPlans, statusEl);
-                if (mailResult.sent > 0 && mailResult.failed === 0) {
-                  showStatus(
-                    statusEl,
-                    "Auto Search: sent " + mailResult.sent + " email(s); Bark_Contacts marked sent.",
-                    "success"
-                  );
-                } else if (mailResult.sent > 0 && mailResult.failed > 0) {
-                  showStatus(
-                    statusEl,
-                    "Auto Search: sent " +
-                      mailResult.sent +
-                      " email(s), " +
-                      mailResult.failed +
-                      " failed (check relay / console).",
-                    "error"
-                  );
-                } else if (mailResult.failed > 0) {
-                  showStatus(
-                    statusEl,
-                    "Auto Search: email send failed (" +
-                      mailResult.failed +
-                      "). Is email_relay.py running? Check Settings relay URL.",
-                    "error"
-                  );
-                }
-              } catch (mailErr) {
-                console.warn("Auto-send email error", mailErr);
-                showStatus(
-                  statusEl,
-                  "Auto Search: email send error: " +
-                    (mailErr && mailErr.message ? mailErr.message : String(mailErr)),
-                  "error"
-                );
-              }
-            }
-
-            notifyContactAdded({
-              name: matched.length === 1 ? String(matched[0].name || "") : String(matched.length) + " matches",
-              emailCount: totalEmails,
-              phoneCount: totalPhones,
-            });
+          const persisted = matched.some((r) => r.persisted);
+          if (matched.length > 0 && !persisted) {
+            showStatus(
+              statusEl,
+              "Auto Search: match found but Bark_Contacts save did not complete.",
+              "error"
+            );
           }
 
           // Update the picked row's Status in the source sheet based on results.
