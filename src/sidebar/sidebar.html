@@ -196,6 +196,12 @@
           <small class="form-hint">Auto Search reads only the first N data rows below the header when picking a Todo lead.</small>
         </div>
 
+        <div class="form-group" style="margin-top: 16px;">
+          <label for="autoSearchIntervalMinutes">Auto Search interval (minutes):</label>
+          <input type="number" id="autoSearchIntervalMinutes" min="1" max="120" step="1" value="2" autocomplete="off">
+          <small class="form-hint">Time from the <em>start</em> of one Auto Search cycle to the <em>start</em> of the next. If the previous cycle is still running at that moment, the extension waits another full interval and tries again.</small>
+        </div>
+
       </div>
 
       <div class="form-section" style="margin-top: 20px;">

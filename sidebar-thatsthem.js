@@ -2,9 +2,29 @@
  * ThatsThem name search pages — email and/or phone pattern matching (e.g. /name/Kristen-Johnson/Cheshire-CT).
  */
 (function () {
-  const AUTO_SEARCH_INTERVAL_MINUTES = 2;
-  const AUTO_SEARCH_INTERVAL_MS = AUTO_SEARCH_INTERVAL_MINUTES * 60 * 1000;
+  const DEFAULT_AUTO_SEARCH_INTERVAL_MINUTES = 2;
   const DEFAULT_SHEETS_TOP_N = 150;
+  let autoSearchIntervalMinutes = DEFAULT_AUTO_SEARCH_INTERVAL_MINUTES;
+
+  function parseAutoSearchIntervalMinutes(raw) {
+    const n = parseInt(String(raw), 10);
+    if (!Number.isFinite(n) || n < 1) return DEFAULT_AUTO_SEARCH_INTERVAL_MINUTES;
+    return Math.min(120, Math.max(1, n));
+  }
+
+  function applyAutoSearchIntervalMinutes(n) {
+    autoSearchIntervalMinutes = parseAutoSearchIntervalMinutes(n);
+    return autoSearchIntervalMinutes;
+  }
+
+  function getAutoSearchIntervalMs() {
+    return autoSearchIntervalMinutes * 60 * 1000;
+  }
+
+  function autoSearchIntervalLabel() {
+    const m = autoSearchIntervalMinutes;
+    return m === 1 ? "1 minute" : m + " minutes";
+  }
   const SHEETS_CONFIG = {
     spreadsheetId: "1rfv9DgxPrUuSQI7P5zYzGa3NEloSVnr-j9Fv3k9ndl4",
     sheetTab: "Bark_Leads",
@@ -1672,6 +1692,7 @@
 
   ready(function () {
     const sheetsTopNInput = document.getElementById("sheetsTopN");
+    const autoSearchIntervalMinutesEl = document.getElementById("autoSearchIntervalMinutes");
     const settingsStatusEl = document.getElementById("settingsStatus");
     const apiKeyEl = document.getElementById("apiKey");
     const saveSettingsBtn = document.getElementById("saveSettings");
@@ -1714,6 +1735,25 @@
       });
     }
 
+    if (autoSearchIntervalMinutesEl) {
+      try {
+        const lsInterval = localStorage.getItem("autoSearchIntervalMinutes");
+        if (lsInterval) applyAutoSearchIntervalMinutes(lsInterval);
+        autoSearchIntervalMinutesEl.value = String(autoSearchIntervalMinutes);
+      } catch (e) {
+        /* ignore */
+      }
+      storageGet(["autoSearchIntervalMinutes"]).then(function (o) {
+        const n = applyAutoSearchIntervalMinutes(o.autoSearchIntervalMinutes);
+        autoSearchIntervalMinutesEl.value = String(n);
+        try {
+          localStorage.setItem("autoSearchIntervalMinutes", String(n));
+        } catch (e2) {
+          /* ignore */
+        }
+      });
+    }
+
     storageGet(["autoSendEmailOnMatch", "mailRelayUrl", "mailRelaySecret", "emailGenerationModel"]).then(function (o) {
       if (autoSendEmailOnMatchEl) autoSendEmailOnMatchEl.checked = o.autoSendEmailOnMatch === true;
       if (mailRelayUrlEl) mailRelayUrlEl.value = o.mailRelayUrl || DEFAULT_MAIL_RELAY_URL;
@@ -1746,6 +1786,23 @@
             /* ignore */
           }
           await storageSet({ sheetsTopN: clamped });
+        }
+
+        if (autoSearchIntervalMinutesEl) {
+          const rawInterval = autoSearchIntervalMinutesEl.value.trim();
+          const intervalN = parseInt(rawInterval, 10);
+          if (!rawInterval || !Number.isFinite(intervalN) || intervalN < 1) {
+            showSettingsSaveStatus("Auto Search interval: enter a whole number of minutes (at least 1).", "error");
+            return;
+          }
+          const clampedInterval = applyAutoSearchIntervalMinutes(intervalN);
+          autoSearchIntervalMinutesEl.value = String(clampedInterval);
+          try {
+            localStorage.setItem("autoSearchIntervalMinutes", String(clampedInterval));
+          } catch (e) {
+            /* ignore */
+          }
+          await storageSet({ autoSearchIntervalMinutes: clampedInterval });
         }
 
         const key = apiKeyEl ? apiKeyEl.value.trim() : "";
@@ -1951,11 +2008,49 @@
       let autoSearchRunning = false; // true only while a cycle is executing
       let autoSearchEnabled = false; // true while interval mode is enabled
       let stopAfterCurrentCycle = false;
-      let autoSearchIntervalId = null;
+      let autoSearchTimeoutId = null;
       let countdownIntervalId = null;
       let nextCycleAtMs = null;
       const autoSearchDefaultLabel = autoSearchSheetBtn.textContent || "Auto Search";
       let restoreDisabledState = null;
+
+      function clearAutoSearchTimeout() {
+        if (autoSearchTimeoutId) {
+          clearTimeout(autoSearchTimeoutId);
+          autoSearchTimeoutId = null;
+        }
+      }
+
+      // Next cycle should START at (previous cycle start + interval). anchorStartMs is the
+      // previous cycle's start time, or the time we last tried to start when deferring.
+      function scheduleNextCycleStart(anchorStartMs) {
+        clearAutoSearchTimeout();
+        if (!autoSearchEnabled) return;
+        const intervalMs = getAutoSearchIntervalMs();
+        nextCycleAtMs = anchorStartMs + intervalMs;
+        const delayMs = Math.max(0, nextCycleAtMs - Date.now());
+        startCountdown();
+        autoSearchTimeoutId = setTimeout(function () {
+          autoSearchTimeoutId = null;
+          onAutoSearchTimer();
+        }, delayMs);
+      }
+
+      async function onAutoSearchTimer() {
+        if (!autoSearchEnabled) return;
+        const plannedStartMs = nextCycleAtMs;
+        if (autoSearchRunning) {
+          showStatus(
+            statusEl,
+            "Auto Search: previous cycle still running; next start in " + autoSearchIntervalLabel() + "…",
+            "info"
+          );
+          // Missed this start slot — wait another full interval from the planned start time.
+          scheduleNextCycleStart(plannedStartMs || Date.now());
+          return;
+        }
+        await runAutoSearchCycle();
+      }
 
       function formatCountdown(ms) {
         const s = Math.max(0, Math.floor(ms / 1000));
@@ -1967,9 +2062,9 @@
       function startCountdown() {
         if (countdownIntervalId) clearInterval(countdownIntervalId);
         countdownIntervalId = setInterval(() => {
-          if (!autoSearchEnabled || autoSearchRunning || !nextCycleAtMs) return;
+          if (!autoSearchEnabled || !nextCycleAtMs) return;
           const remaining = nextCycleAtMs - Date.now();
-          showStatus(statusEl, "Auto Search: next cycle in " + formatCountdown(remaining), "info");
+          showStatus(statusEl, "Auto Search: next cycle starts in " + formatCountdown(remaining), "info");
         }, 1000);
       }
 
@@ -2019,10 +2114,10 @@
       }
 
       async function runAutoSearchCycle() {
-        // Non-overlapping: if a previous cycle is still running, skip this tick.
         if (autoSearchRunning || !autoSearchEnabled) return;
         autoSearchRunning = true;
-        nextCycleAtMs = null;
+        const cycleStartMs = Date.now();
+        scheduleNextCycleStart(cycleStartMs);
         try {
           // Clear previous cycle results before starting a new one.
           if (resultsEl) resultsEl.innerHTML = "";
@@ -2204,16 +2299,11 @@
           if (!autoSearchEnabled || stopAfterCurrentCycle) {
             stopAfterCurrentCycle = false;
             autoSearchEnabled = false;
-            if (autoSearchIntervalId) {
-              clearInterval(autoSearchIntervalId);
-              autoSearchIntervalId = null;
-            }
+            clearAutoSearchTimeout();
             setOtherButtonsDisabled(false);
             autoSearchSheetBtn.textContent = autoSearchDefaultLabel;
             autoSearchSheetBtn.disabled = false;
             stopCountdown();
-          } else {
-            nextCycleAtMs = Date.now() + AUTO_SEARCH_INTERVAL_MS;
           }
         }
       }
@@ -2222,10 +2312,7 @@
         // Stop scheduling new cycles. If a cycle is currently running,
         // let it finish successfully, then clean up.
         autoSearchEnabled = false;
-        if (autoSearchIntervalId) {
-          clearInterval(autoSearchIntervalId);
-          autoSearchIntervalId = null;
-        }
+        clearAutoSearchTimeout();
         if (autoSearchRunning) {
           stopAfterCurrentCycle = true;
           autoSearchSheetBtn.textContent = "Stopping…";
@@ -2241,9 +2328,7 @@
       }
 
       autoSearchSheetBtn.addEventListener("click", async function () {
-        // Toggle behavior:
-        // - first click enables interval mode (runs immediately, then every 5 minutes)
-        // - second click stops (and requests cancellation if a cycle is mid-flight)
+        // Toggle: first click runs immediately then on a configurable interval; second click stops.
         if (autoSearchEnabled) {
           stopAutoSearch();
           return;
@@ -2253,15 +2338,9 @@
         stopAfterCurrentCycle = false;
         autoSearchSheetBtn.textContent = "Stop Auto Search";
         setOtherButtonsDisabled(true);
-        showStatus(statusEl, "Auto Search enabled (every 5 minutes).", "info");
+        showStatus(statusEl, "Auto Search enabled (every " + autoSearchIntervalLabel() + ").", "info");
 
-        // Run immediately, then every 5 minutes.
         await runAutoSearchCycle();
-        nextCycleAtMs = Date.now() + AUTO_SEARCH_INTERVAL_MS;
-        startCountdown();
-        autoSearchIntervalId = setInterval(function () {
-          runAutoSearchCycle();
-        }, AUTO_SEARCH_INTERVAL_MS);
       });
     }
 
