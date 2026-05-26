@@ -1357,39 +1357,52 @@
     if (phoneCount != null) lines.push("Phones: " + String(phoneCount));
     const detail = lines.length ? lines.join(" · ") : "Saved to Bark_Contacts";
     const message = (name ? name + " — " : "") + detail;
+    const notificationId = "bark_contacts_added_" + String(Date.now()) + "_" + String(Math.random()).slice(2, 8);
 
-    function createLocal() {
-      try {
-        if (!chrome || !chrome.notifications || typeof chrome.notifications.create !== "function") return;
-        chrome.notifications.create(
-          "bark_contacts_added_" + String(Date.now()),
-          {
-            type: "basic",
-            iconUrl: chrome.runtime.getURL("icon.png"),
-            title: "Bark contact added",
-            message: message,
-            priority: 2,
-          },
-          function () {
-            if (chrome.runtime.lastError) {
-              console.warn("Notification failed:", chrome.runtime.lastError.message);
-            }
-          }
-        );
-      } catch (e) {
-        console.warn("Notification failed", e);
-      }
+    if (!chrome || !chrome.notifications || typeof chrome.notifications.create !== "function") {
+      console.warn("chrome.notifications API not available");
+      return;
     }
 
+    const iconUrl = chrome.runtime.getURL("icon.png");
+    const options = {
+      type: "basic",
+      iconUrl: iconUrl,
+      title: "Bark contact added",
+      message: message,
+      priority: 2,
+      requireInteraction: false,
+      silent: false,
+    };
+
     try {
-      chrome.runtime.sendMessage(
-        { action: "showBarkNotification", title: "Bark contact added", message: message },
-        function (res) {
-          if (chrome.runtime.lastError || !res || res.success !== true) createLocal();
+      chrome.notifications.create(notificationId, options, function () {
+        if (chrome.runtime.lastError) {
+          console.warn("Side panel notification failed:", chrome.runtime.lastError.message);
+          try {
+            chrome.runtime.sendMessage({
+              action: "showBarkNotification",
+              title: "Bark contact added",
+              message: message,
+              notificationId: notificationId + "_sw",
+            });
+          } catch (e2) {
+            /* ignore */
+          }
         }
-      );
+      });
     } catch (e) {
-      createLocal();
+      console.warn("Side panel notification failed", e);
+      try {
+        chrome.runtime.sendMessage({
+          action: "showBarkNotification",
+          title: "Bark contact added",
+          message: message,
+          notificationId: notificationId + "_sw",
+        });
+      } catch (e2) {
+        /* ignore */
+      }
     }
   }
 
