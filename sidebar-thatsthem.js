@@ -1110,22 +1110,60 @@
     return "https://www.google.com/search?hl=en&gl=us&pws=0&q=" + encodeURIComponent(q);
   }
 
+  function newGoogleExtractionRunId() {
+    return "g_" + String(Date.now()) + "_" + Math.random().toString(36).slice(2, 10);
+  }
+
+  /** Stop any in-flight Google crawl and close its tab so a new cycle cannot inherit names. */
+  async function abortPriorGoogleExtraction() {
+    await new Promise((resolve) => {
+      chrome.storage.local.set(
+        {
+          stopGoogleExtraction: true,
+          googleExtractionState: null,
+          googleCurrentNames: [],
+          googleExtractionDone: null,
+        },
+        resolve
+      );
+    });
+    const st = await storageGetLocal(["googleExtractionTabId"]);
+    const priorTabId = st.googleExtractionTabId;
+    if (priorTabId != null) {
+      try {
+        await chrome.tabs.remove(priorTabId);
+      } catch (e) {
+        /* tab may already be closed */
+      }
+    }
+    await new Promise((resolve) => {
+      chrome.storage.local.set({ googleExtractionTabId: null, stopGoogleExtraction: false }, resolve);
+    });
+  }
+
   function storageGetLocal(keys) {
     return new Promise((resolve) => {
       chrome.storage.local.get(keys, (o) => resolve(o || {}));
     });
   }
 
-  async function pollGoogleExtractionDone(sinceMs) {
+  async function pollGoogleExtractionDone(sinceMs, runId) {
     const since = typeof sinceMs === "number" ? sinceMs : 0;
+    const expectedRunId = String(runId || "");
     while (true) {
       const st = await storageGetLocal(["googleExtractionDone"]);
       const done = st.googleExtractionDone;
-      if (done && typeof done.at === "number" && done.at >= since) {
+      if (
+        done &&
+        typeof done.at === "number" &&
+        done.at >= since &&
+        (!expectedRunId || String(done.runId || "") === expectedRunId)
+      ) {
         return {
           action: "googleExtractionComplete",
           names: Array.isArray(done.names) ? done.names : [],
           pageCount: done.pageCount,
+          runId: done.runId,
         };
       }
       await new Promise((r) => setTimeout(r, 800));
@@ -1133,14 +1171,24 @@
   }
 
   async function extractGoogleNamesFromCriteria(firstname, criteria, onProgress) {
+    await abortPriorGoogleExtraction();
+
+    const extractionRunId = newGoogleExtractionRunId();
+    const extractionStartedAt = Date.now();
+    await new Promise((resolve) => {
+      chrome.storage.local.set(
+        { googleExtractionDone: null, googleExtractionRunId: extractionRunId },
+        resolve
+      );
+    });
+
     const url = googleSearchUrl(criteria);
     const tab = await chrome.tabs.create({ url, active: false });
     const tabId = tab && tab.id;
     if (!tabId) throw new Error("Failed to open Google tab");
 
-    const extractionStartedAt = Date.now();
     await new Promise((resolve) => {
-      chrome.storage.local.set({ googleExtractionDone: null }, resolve);
+      chrome.storage.local.set({ googleExtractionTabId: tabId }, resolve);
     });
 
     let shouldCloseTab = true;
@@ -1151,6 +1199,13 @@
       return new Promise((resolve) => {
         const fn = (msg) => {
           if (!msg || allowedActions.indexOf(msg.action) === -1) return;
+          if (
+            (msg.action === "googleExtractionComplete" || msg.action === "googleExtractionBlocked") &&
+            msg.runId &&
+            String(msg.runId) !== extractionRunId
+          ) {
+            return;
+          }
           runtimeWaitListener = null;
           chrome.runtime.onMessage.removeListener(fn);
           resolve(msg);
@@ -1168,6 +1223,7 @@
             action: "extractNamesGoogle",
             firstname: String(firstname || "").trim(),
             resume: !!resume,
+            runId: extractionRunId,
           },
           resolve
         );
@@ -1270,7 +1326,7 @@
       while (true) {
         const msg = await Promise.race([
           waitForRuntimeMessage(["googleExtractionComplete", "googleExtractionBlocked"]),
-          pollGoogleExtractionDone(extractionStartedAt),
+          pollGoogleExtractionDone(extractionStartedAt, extractionRunId),
         ]);
         if (msg.action === "googleExtractionBlocked") {
           shouldCloseTab = false;
@@ -1305,6 +1361,19 @@
       }
       try {
         if (shouldCloseTab) await chrome.tabs.remove(tabId);
+      } catch (e) {
+        /* ignore */
+      }
+      try {
+        await new Promise((resolve) => {
+          chrome.storage.local.get(["googleExtractionTabId"], (st) => {
+            if (st && st.googleExtractionTabId === tabId) {
+              chrome.storage.local.set({ googleExtractionTabId: null }, resolve);
+            } else {
+              resolve();
+            }
+          });
+        });
       } catch (e) {
         /* ignore */
       }
@@ -1970,11 +2039,15 @@
           // Fill sidebar fields so you can run Search ThatsThem immediately.
           const fullName = String(rec.name || "").trim();
           const googleMatchToken = firstToken(fullName);
+
+          await abortPriorGoogleExtraction();
+          if (nameList) nameList.value = "";
+
           if (firstnameEl) firstnameEl.value = googleMatchToken || fullName;
           if (cityEl && loc.city) cityEl.value = loc.city;
           if (emailPatternEl && rec.email) emailPatternEl.value = rec.email;
           if (phonePatternEl && rec.phone) phonePatternEl.value = rec.phone;
-          if (nameList) nameList.value = rec.name ? rec.name : nameList.value;
+          if (nameList) nameList.value = googleMatchToken || fullName || "";
           if (stateEl && loc.st) {
             const opts = stateEl.querySelectorAll("option");
             for (let i = 0; i < opts.length; i++) {
@@ -2007,31 +2080,26 @@
               const names = await extractGoogleNamesFromCriteria(googleMatchToken, criteria, (p) => {
                 if (p && typeof p.pageNum === "number") setGoogleProgress(p.pageNum);
               });
-              if (Array.isArray(names) && names.length && nameList) {
-                nameList.value = names.join("\n");
-              } else if (nameList && !String(nameList.value || "").trim()) {
-                showStatus(
-                  statusEl,
-                  "Auto Search: Google finished with no extracted names; using lead name for ThatsThem.",
-                  "info"
-                );
+              if (Array.isArray(names) && nameList) {
+                if (names.length) {
+                  nameList.value = names.join("\n");
+                } else {
+                  nameList.value = googleMatchToken || fullName || "";
+                  showStatus(
+                    statusEl,
+                    "Auto Search: Google finished with no extracted names; using lead name for ThatsThem.",
+                    "info"
+                  );
+                }
               }
             } catch (googleErr) {
-              const partial = await storageGetLocal(["googleCurrentNames"]);
-              const partialNames = Array.isArray(partial.googleCurrentNames) ? partial.googleCurrentNames : [];
-              if (partialNames.length && nameList) {
-                nameList.value = partialNames.join("\n");
-                showStatus(
-                  statusEl,
-                  "Auto Search: Google error, continuing with " +
-                    partialNames.length +
-                    " name(s) collected so far. " +
-                    (googleErr && googleErr.message ? googleErr.message : String(googleErr)),
-                  "error"
-                );
-              } else {
-                throw googleErr;
-              }
+              if (nameList) nameList.value = googleMatchToken || fullName || "";
+              showStatus(
+                statusEl,
+                "Auto Search: Google extraction failed; using lead name for ThatsThem. " +
+                  (googleErr && googleErr.message ? googleErr.message : String(googleErr)),
+                "error"
+              );
             }
           }
 
