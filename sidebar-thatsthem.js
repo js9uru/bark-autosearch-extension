@@ -1837,6 +1837,7 @@
     const stateEl = document.getElementById("state");
     const nameList = document.getElementById("nameList");
     const statusEl = document.getElementById("status");
+    const autoSearchCountdownEl = document.getElementById("autoSearchCountdown");
     const resultsEl = document.getElementById("results");
 
     if (!searchThatsThemBtn || !nameList) return;
@@ -2030,6 +2031,7 @@
         nextCycleAtMs = anchorStartMs + intervalMs;
         const delayMs = Math.max(0, nextCycleAtMs - Date.now());
         startCountdown();
+        updateAutoSearchCountdownDisplay();
         autoSearchTimeoutId = setTimeout(function () {
           autoSearchTimeoutId = null;
           onAutoSearchTimer();
@@ -2059,12 +2061,29 @@
         return mm + ":" + ss;
       }
 
+      function updateAutoSearchCountdownDisplay() {
+        if (!autoSearchCountdownEl || !autoSearchEnabled || !nextCycleAtMs) {
+          hideAutoSearchCountdown();
+          return;
+        }
+        const remaining = nextCycleAtMs - Date.now();
+        autoSearchCountdownEl.textContent =
+          "Auto Search: next cycle starts in " + formatCountdown(remaining);
+        autoSearchCountdownEl.className = "status status-countdown info";
+        autoSearchCountdownEl.style.display = "block";
+      }
+
+      function hideAutoSearchCountdown() {
+        if (!autoSearchCountdownEl) return;
+        autoSearchCountdownEl.textContent = "";
+        autoSearchCountdownEl.style.display = "none";
+      }
+
       function startCountdown() {
         if (countdownIntervalId) clearInterval(countdownIntervalId);
         countdownIntervalId = setInterval(() => {
           if (!autoSearchEnabled || !nextCycleAtMs) return;
-          const remaining = nextCycleAtMs - Date.now();
-          showStatus(statusEl, "Auto Search: next cycle starts in " + formatCountdown(remaining), "info");
+          updateAutoSearchCountdownDisplay();
         }, 1000);
       }
 
@@ -2072,6 +2091,7 @@
         if (countdownIntervalId) clearInterval(countdownIntervalId);
         countdownIntervalId = null;
         nextCycleAtMs = null;
+        hideAutoSearchCountdown();
       }
 
       function setOtherButtonsDisabled(disabled) {
@@ -2154,8 +2174,14 @@
             }
           }
 
-          // Print criteria before the Google extraction status.
-          showStatus(statusEl, "Search criteria:\n" + criteria, "info");
+          function searchCriteriaStatusText(extra) {
+            const line = "Search criteria: " + String(criteria || "").trim();
+            const tail = extra != null && String(extra).length ? String(extra) : "";
+            return tail ? line + "\n\n" + tail : line + "\n\n";
+          }
+
+          // Print criteria (one line) with blank lines before the next status block.
+          showStatus(statusEl, searchCriteriaStatusText(), "info");
 
           // Run Google name extraction using the criteria (same as Google button).
           if (googleMatchToken) {
@@ -2163,10 +2189,9 @@
               const pn = pageNum != null ? String(pageNum) : "?";
               showStatus(
                 statusEl,
-                "Search criteria:\n" +
-                  criteria +
-                  "\n\nAuto Search: running Google name extraction…\nPage: " +
-                  pn,
+                searchCriteriaStatusText(
+                  "Auto Search: running Google name extraction…\nPage: " + pn
+                ),
                 "info"
               );
             };
@@ -2313,6 +2338,7 @@
         // let it finish successfully, then clean up.
         autoSearchEnabled = false;
         clearAutoSearchTimeout();
+        hideAutoSearchCountdown();
         if (autoSearchRunning) {
           stopAfterCurrentCycle = true;
           autoSearchSheetBtn.textContent = "Stopping…";

@@ -144,6 +144,10 @@ textarea {
   border-radius: 4px;
   margin-bottom: 10px;
   font-size: 13px;
+  white-space: pre-line;
+}
+.status-countdown {
+  margin-bottom: 6px;
 }
 .status.info {
   background-color: #e3f2fd;
