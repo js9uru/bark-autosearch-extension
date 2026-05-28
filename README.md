@@ -74,7 +74,7 @@ If matches were found:
 - Creates `Bark_Contacts` tab if missing
 - Inserts a new row at the top (row 2)
 - Writes **all matched emails** and **all matched phones** (newline-separated)
-- `Added At` is written in your **local machine timezone**
+- `Added At` is written in **UTC+9** (`YYYY-MM-DD HH:MM UTC+9`, same as bark-leads-scraper)
 
 #### 6) Update original row status
 

@@ -589,16 +589,16 @@
     return null;
   }
 
-  /** Same format as bark_monitor_gspread.py: `datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")` */
-  function addedAtUtcString() {
-    const d = new Date();
+  /** Same format as bark_monitor_gspread.py: UTC+9 (`%Y-%m-%d %H:%M UTC+9`). */
+  function addedAtString() {
     const pad = (n) => String(n).padStart(2, "0");
-    const yyyy = d.getUTCFullYear();
-    const mm = pad(d.getUTCMonth() + 1);
-    const dd = pad(d.getUTCDate());
-    const hh = pad(d.getUTCHours());
-    const mi = pad(d.getUTCMinutes());
-    return yyyy + "-" + mm + "-" + dd + " " + hh + ":" + mi + " UTC";
+    const utc9 = new Date(Date.now() + 9 * 60 * 60 * 1000);
+    const yyyy = utc9.getUTCFullYear();
+    const mm = pad(utc9.getUTCMonth() + 1);
+    const dd = pad(utc9.getUTCDate());
+    const hh = pad(utc9.getUTCHours());
+    const mi = pad(utc9.getUTCMinutes());
+    return yyyy + "-" + mm + "-" + dd + " " + hh + ":" + mi + " UTC+9";
   }
 
   function extractAllEmails(emails) {
@@ -968,7 +968,7 @@
       allEmails.join("\n"),
       String(rec.verifiedPhone || ""),
       String(rec.details || ""),
-      addedAtUtcString(),
+      addedAtString(),
       "",
     ];
     return { rowValues: rowValues, allEmails: allEmails, allPhones: allPhones };
