@@ -1460,7 +1460,7 @@
       title: "Bark contact added",
       message: message,
       priority: 2,
-      requireInteraction: false,
+      requireInteraction: true,
       silent: false,
     };
 
@@ -2022,8 +2022,8 @@
         }
       }
 
-      // Next cycle should START at (previous cycle start + interval). anchorStartMs is the
-      // previous cycle's start time, or the time we last tried to start when deferring.
+      // Next cycle should START at (plannedStartMs + interval). We pass the *planned* start
+      // time (not the actual start), so background timer delays don't shift the cadence.
       function scheduleNextCycleStart(anchorStartMs) {
         clearAutoSearchTimeout();
         if (!autoSearchEnabled) return;
@@ -2051,7 +2051,7 @@
           scheduleNextCycleStart(plannedStartMs || Date.now());
           return;
         }
-        await runAutoSearchCycle();
+        await runAutoSearchCycle(plannedStartMs || Date.now());
       }
 
       function formatCountdown(ms) {
@@ -2133,11 +2133,11 @@
         }
       }
 
-      async function runAutoSearchCycle() {
+      async function runAutoSearchCycle(plannedStartMs) {
         if (autoSearchRunning || !autoSearchEnabled) return;
         autoSearchRunning = true;
-        const cycleStartMs = Date.now();
-        scheduleNextCycleStart(cycleStartMs);
+        const anchorMs = typeof plannedStartMs === "number" ? plannedStartMs : Date.now();
+        scheduleNextCycleStart(anchorMs);
         try {
           // Clear previous cycle results before starting a new one.
           if (resultsEl) resultsEl.innerHTML = "";
@@ -2366,7 +2366,7 @@
         setOtherButtonsDisabled(true);
         showStatus(statusEl, "Auto Search enabled (every " + autoSearchIntervalLabel() + ").", "info");
 
-        await runAutoSearchCycle();
+        await runAutoSearchCycle(Date.now());
       });
     }
 
