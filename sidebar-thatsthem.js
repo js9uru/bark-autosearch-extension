@@ -58,6 +58,9 @@
     "Sent",
   ];
 
+  const CONTACTS_RETENTION_DAYS = 30;
+  const LAST_CONTACTS_PRUNE_DATE_KEY = "lastContactsPruneDateKey";
+
   const DEFAULT_MAIL_RELAY_URL = "http://13.237.55.109:8765/send";
   const DEFAULT_EMAIL_MODEL = "gpt-4o-mini";
   const OUTREACH_COMPANY = "Pinnacle Engineering, Inc.";
@@ -406,6 +409,105 @@
       return m[3] + "-" + mo + "-" + da;
     }
     return null;
+  }
+
+  function todayDateKeyUtc9() {
+    const utc9 = new Date(Date.now() + 9 * 60 * 60 * 1000);
+    const pad = (n) => String(n).padStart(2, "0");
+    return (
+      utc9.getUTCFullYear() +
+      "-" +
+      pad(utc9.getUTCMonth() + 1) +
+      "-" +
+      pad(utc9.getUTCDate())
+    );
+  }
+
+  function addedAtCutoffDateKey(retentionDays) {
+    const days = typeof retentionDays === "number" ? retentionDays : CONTACTS_RETENTION_DAYS;
+    const utc9 = new Date(Date.now() + 9 * 60 * 60 * 1000);
+    const cutoff = new Date(
+      Date.UTC(utc9.getUTCFullYear(), utc9.getUTCMonth(), utc9.getUTCDate())
+    );
+    cutoff.setUTCDate(cutoff.getUTCDate() - days);
+    const pad = (n) => String(n).padStart(2, "0");
+    return (
+      cutoff.getUTCFullYear() +
+      "-" +
+      pad(cutoff.getUTCMonth() + 1) +
+      "-" +
+      pad(cutoff.getUTCDate())
+    );
+  }
+
+  function isAddedAtOlderThanRetention(cell, retentionDays) {
+    const key = parseAddedAtToDateKey(cell);
+    if (!key) return false;
+    return key < addedAtCutoffDateKey(retentionDays);
+  }
+
+  async function pruneOldContactRows(token, contactsSheetId, retentionDays) {
+    const range = a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab) + "!H2:H10000";
+    let values = [];
+    try {
+      const data = await sheetsValuesGet(token, range);
+      values = (data && data.values) || [];
+    } catch (e) {
+      console.warn("Bark_Contacts: could not read Added At for pruning", e);
+      return 0;
+    }
+
+    const toDelete = [];
+    for (let i = 0; i < values.length; i++) {
+      const cell = values[i] && values[i][0] != null ? values[i][0] : "";
+      if (isAddedAtOlderThanRetention(cell, retentionDays)) {
+        toDelete.push(i + 1); // 0-based sheet row index (row 2 -> 1)
+      }
+    }
+    if (!toDelete.length) return 0;
+
+    const requests = toDelete
+      .sort(function (a, b) {
+        return b - a;
+      })
+      .map(function (idx) {
+        return {
+          deleteDimension: {
+            range: {
+              sheetId: contactsSheetId,
+              dimension: "ROWS",
+              startIndex: idx,
+              endIndex: idx + 1,
+            },
+          },
+        };
+      });
+
+    try {
+      await sheetsBatchUpdate(token, requests);
+      console.log(
+        "Pruned " +
+          toDelete.length +
+          " row(s) from " +
+          SHEETS_CONFIG.contactsTab +
+          " (older than " +
+          (typeof retentionDays === "number" ? retentionDays : CONTACTS_RETENTION_DAYS) +
+          " days)."
+      );
+    } catch (e) {
+      console.warn("Bark_Contacts: prune failed", e);
+      return 0;
+    }
+    return toDelete.length;
+  }
+
+  async function maybePruneOldContactsOncePerDay(token, contactsSheetId) {
+    const today = todayDateKeyUtc9();
+    const o = await storageGet([LAST_CONTACTS_PRUNE_DATE_KEY]);
+    if (o[LAST_CONTACTS_PRUNE_DATE_KEY] === today) return 0;
+    const n = await pruneOldContactRows(token, contactsSheetId, CONTACTS_RETENTION_DAYS);
+    await storageSet({ [LAST_CONTACTS_PRUNE_DATE_KEY]: today });
+    return n;
   }
 
   function countDatesFromColumnValues(values) {
@@ -2139,6 +2241,14 @@
         const anchorMs = typeof plannedStartMs === "number" ? plannedStartMs : Date.now();
         scheduleNextCycleStart(anchorMs);
         try {
+          try {
+            const saPrune = await loadServiceAccountJson();
+            const tokenPrune = await getServiceAccountAccessToken(saPrune);
+            const contactsInfo = await ensureContactsSheet(tokenPrune);
+            await maybePruneOldContactsOncePerDay(tokenPrune, contactsInfo.sheetId);
+          } catch (pruneErr) {
+            console.warn("Bark_Contacts: daily prune skipped", pruneErr);
+          }
           // Clear previous cycle results before starting a new one.
           if (resultsEl) resultsEl.innerHTML = "";
           showStatus(statusEl, "Auto Search: checking Google Sheet for Todo…", "info");
