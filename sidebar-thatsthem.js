@@ -26,7 +26,7 @@
     return m === 1 ? "1 minute" : m + " minutes";
   }
   const SHEETS_CONFIG = {
-    spreadsheetId: "1rfv9DgxPrUuSQI7P5zYzGa3NEloSVnr-j9Fv3k9ndl4",
+    spreadsheetId: "1NrE9HZ9LjNg2SxSCEwO1bFr35ADn9F0oq1fP2dD3Xsk",
     sheetTab: "Bark_Leads",
     topN: DEFAULT_SHEETS_TOP_N,
     statusColName: "Status",
