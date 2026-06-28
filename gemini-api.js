@@ -1,9 +1,9 @@
 /**
- * Google Gemini API — matches Postman generateContent for gemini-2.5-flash.
+ * Google Gemini API — generateContent for gemini-3.1-flash-lite.
  * API key: Settings field `apiKey` in chrome.storage.local
  */
 (function (global) {
-  const DEFAULT_MODEL = "gemini-2.5-flash";
+  const DEFAULT_MODEL = "gemini-3.1-flash-lite";
   const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
   const DEFAULT_TIMEOUT_MS = 120000;
 
@@ -21,6 +21,7 @@
     if (!m) return DEFAULT_MODEL;
     if (m.indexOf("models/") === 0) m = m.slice("models/".length);
     if (/^gpt-/i.test(m) || /^o\d/i.test(m) || /^text-davinci/i.test(m)) return DEFAULT_MODEL;
+    if (m === "gemini-2.5-flash" || m === "gemini-2.0-flash") return DEFAULT_MODEL;
     return m || DEFAULT_MODEL;
   }
 

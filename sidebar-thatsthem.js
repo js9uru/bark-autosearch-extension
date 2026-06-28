@@ -62,7 +62,7 @@
   const LAST_CONTACTS_PRUNE_DATE_KEY = "lastContactsPruneDateKey";
 
   const DEFAULT_MAIL_RELAY_URL = "http://13.237.55.109:8765/send";
-  const DEFAULT_EMAIL_MODEL = "gemini-2.5-flash";
+  const DEFAULT_EMAIL_MODEL = "gemini-3.1-flash-lite";
   const OUTREACH_COMPANY = "Pinnacle Engineering, Inc.";
   const OUTREACH_SENDER = "Thomas Vadnais";
 
