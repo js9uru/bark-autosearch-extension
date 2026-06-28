@@ -66,6 +66,23 @@
   const OUTREACH_COMPANY = "Pinnacle Engineering, Inc.";
   const OUTREACH_SENDER = "Thomas Vadnais";
 
+  function isGeminiUsageLimitError(msg) {
+    const s = String(msg || "").toLowerCase();
+    if (!s) return false;
+    return (
+      /429/.test(s) ||
+      /resource_exhausted/.test(s) ||
+      /rate limit/.test(s) ||
+      /quota exceeded/.test(s) ||
+      /exceeded your (current )?quota/.test(s) ||
+      /too many requests/.test(s) ||
+      /generaterequestsperday/.test(s) ||
+      /generaterequestsperminute/.test(s) ||
+      /perdayperproject/.test(s) ||
+      /perminuteperproject/.test(s)
+    );
+  }
+
   function firstToken(s) {
     const t = String(s || "").trim();
     if (!t) return "";
@@ -1036,6 +1053,7 @@
       generated = await generateOutreachEmail(leadForEmail);
     } catch (e) {
       console.warn("Auto-send email generation failed", e);
+      if (isGeminiUsageLimitError(e && e.message)) throw e;
       return { sent: 0, failed: batches.length };
     }
 
@@ -1145,6 +1163,9 @@
             row.persisted = true;
           })
           .catch(function (err) {
+            if (isGeminiUsageLimitError(err && err.message) && ctx.onGeminiUsageLimit) {
+              ctx.onGeminiUsageLimit(err.message);
+            }
             saveErrors++;
             row.persisted = false;
             console.warn("Bark_Contacts async save failed for " + String(row.name || ""), err);
@@ -1474,6 +1495,9 @@
           continue;
         }
         if (msg.action === "googleExtractionComplete") {
+          if (msg.error && isGeminiUsageLimitError(msg.error)) {
+            throw new Error("Gemini API usage limit reached: " + msg.error);
+          }
           if (msg.error && (!msg.names || !msg.names.length)) {
             throw new Error("Gemini: " + msg.error);
           }
@@ -2368,11 +2392,15 @@
                 }
               }
             } catch (googleErr) {
+              const errMsg = googleErr && googleErr.message ? googleErr.message : String(googleErr);
+              if (isGeminiUsageLimitError(errMsg)) {
+                await stopAutoSearchForApiLimit(errMsg);
+                return;
+              }
               if (nameList) nameList.value = googleMatchToken || fullName || "";
               showStatus(
                 statusEl,
-                "Auto Search: Google extraction failed; using lead name for ThatsThem. " +
-                  (googleErr && googleErr.message ? googleErr.message : String(googleErr)),
+                "Auto Search: Google extraction failed; using lead name for ThatsThem. " + errMsg,
                 "error"
               );
             }
@@ -2392,6 +2420,9 @@
             statusEl: statusEl,
             token: null,
             sheetInfo: null,
+            onGeminiUsageLimit: function (detail) {
+              stopAutoSearchForApiLimit(detail);
+            },
           };
           const persistQueue = createAutoSearchPersistQueue(contactsCtx);
           const matchResults = await runThatsThemFromUi({
@@ -2471,7 +2502,12 @@
             );
           }
         } catch (e) {
-          showStatus(statusEl, "Auto Search error: " + (e && e.message ? e.message : String(e)), "error");
+          const errMsg = e && e.message ? e.message : String(e);
+          if (isGeminiUsageLimitError(errMsg)) {
+            await stopAutoSearchForApiLimit(errMsg);
+          } else {
+            showStatus(statusEl, "Auto Search error: " + errMsg, "error");
+          }
         } finally {
           autoSearchRunning = false;
           // If user requested stop while a cycle was running, we stop scheduling
@@ -2506,6 +2542,41 @@
         autoSearchSheetBtn.disabled = false;
         stopCountdown();
         showStatus(statusEl, "Auto Search: stopped.", "info");
+      }
+
+      async function stopAutoSearchForApiLimit(detail) {
+        autoSearchEnabled = false;
+        stopAfterCurrentCycle = false;
+        clearAutoSearchTimeout();
+        hideAutoSearchCountdown();
+        setOtherButtonsDisabled(false);
+        autoSearchSheetBtn.textContent = autoSearchDefaultLabel;
+        autoSearchSheetBtn.disabled = false;
+        stopCountdown();
+        try {
+          await abortPriorGoogleExtraction();
+        } catch (e) {
+          /* ignore */
+        }
+        const detailStr = detail ? String(detail).trim() : "";
+        showStatus(
+          statusEl,
+          "Auto Search stopped: Gemini API usage limit reached." +
+            (detailStr ? "\n\n" + detailStr : "") +
+            "\n\nWait and try again later (daily quota resets midnight Pacific Time).",
+          "error"
+        );
+        try {
+          chrome.notifications.create("gemini-limit-" + Date.now(), {
+            type: "basic",
+            iconUrl: chrome.runtime.getURL("icon.png"),
+            title: "Auto Search stopped",
+            message: "Gemini API usage limit reached. Auto Search has been stopped.",
+            priority: 2,
+          });
+        } catch (e) {
+          /* ignore */
+        }
       }
 
       autoSearchSheetBtn.addEventListener("click", async function () {
