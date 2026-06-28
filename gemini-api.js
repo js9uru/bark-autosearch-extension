@@ -21,7 +21,6 @@
     if (!m) return DEFAULT_MODEL;
     if (m.indexOf("models/") === 0) m = m.slice("models/".length);
     if (/^gpt-/i.test(m) || /^o\d/i.test(m) || /^text-davinci/i.test(m)) return DEFAULT_MODEL;
-    if (m === "gemini-2.5-flash" || m === "gemini-2.0-flash") return DEFAULT_MODEL;
     return m || DEFAULT_MODEL;
   }
 
@@ -102,6 +101,10 @@
       body.generationConfig = body.generationConfig || {};
       body.generationConfig.responseMimeType = opts.responseMimeType;
     }
+    if (opts && opts.maxOutputTokens != null) {
+      body.generationConfig = body.generationConfig || {};
+      body.generationConfig.maxOutputTokens = opts.maxOutputTokens;
+    }
 
     const res = await fetch(url, {
       method: "POST",
@@ -163,6 +166,7 @@
           temperature: 0,
           thinkingBudget: 0,
           responseMimeType: "application/json",
+          maxOutputTokens: 8192,
         }),
         new Promise(function (_, reject) {
           setTimeout(function () {
