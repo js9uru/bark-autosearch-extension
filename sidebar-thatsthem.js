@@ -62,7 +62,7 @@
   const LAST_CONTACTS_PRUNE_DATE_KEY = "lastContactsPruneDateKey";
 
   const DEFAULT_MAIL_RELAY_URL = "http://13.237.55.109:8765/send";
-  const DEFAULT_EMAIL_MODEL = "gpt-4o-mini";
+  const DEFAULT_EMAIL_MODEL = "gemini-2.5-flash";
   const OUTREACH_COMPANY = "Pinnacle Engineering, Inc.";
   const OUTREACH_SENDER = "Thomas Vadnais";
 
@@ -822,7 +822,7 @@
     };
   }
 
-  async function getOpenAiApiKey() {
+  async function getGeminiApiKey() {
     let key = "";
     try {
       key = localStorage.getItem("apiKey") || "";
@@ -834,10 +834,17 @@
     return String(o.apiKey || "").trim();
   }
 
+  function normalizeGeminiModel(model) {
+    let m = String(model || "").trim();
+    if (!m) return DEFAULT_EMAIL_MODEL;
+    if (m.indexOf("models/") === 0) m = m.slice("models/".length);
+    if (/^gpt-/i.test(m) || /^o\d/i.test(m) || /^text-davinci/i.test(m)) return DEFAULT_EMAIL_MODEL;
+    return m || DEFAULT_EMAIL_MODEL;
+  }
+
   async function getEmailGenerationModel() {
     const o = await storageGet(["emailGenerationModel"]);
-    const model = String(o.emailGenerationModel || DEFAULT_EMAIL_MODEL).trim();
-    return model || DEFAULT_EMAIL_MODEL;
+    return normalizeGeminiModel(o.emailGenerationModel);
   }
 
   function serviceToRolePhrase(service) {
@@ -880,20 +887,48 @@
     return phrase + " in " + city;
   }
 
-  function parseOpenAiJsonContent(content) {
+  function parseGeminiJsonContent(content) {
     let text = String(content || "").trim();
     const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
     if (fence) text = fence[1].trim();
+    const brace = text.match(/\{[\s\S]*\}/);
+    if (brace) text = brace[0];
     try {
       return JSON.parse(text);
     } catch (e) {
-      throw new Error("OpenAI returned invalid JSON for email body");
+      throw new Error("Gemini returned invalid JSON for email body");
     }
   }
 
+  function geminiGenerateContentViaBackground(opts) {
+    return new Promise(function (resolve, reject) {
+      chrome.runtime.sendMessage(
+        {
+          action: "geminiGenerateContent",
+          model: opts.model,
+          systemInstruction: opts.systemInstruction,
+          userText: opts.userText,
+          temperature: opts.temperature,
+          responseMimeType: opts.responseMimeType,
+        },
+        function (resp) {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          if (!resp || resp.success !== true) {
+            reject(new Error((resp && resp.error) || "Gemini request failed"));
+            return;
+          }
+          resolve(resp.text);
+        }
+      );
+    });
+  }
+
   async function generateOutreachEmail(lead) {
-    const apiKey = await getOpenAiApiKey();
-    if (!apiKey) throw new Error("OpenAI API key not set in Settings");
+    const apiKey = await getGeminiApiKey();
+    if (!apiKey) throw new Error("Gemini API key not set in Settings");
 
     const greetingFirstName = greetingFirstNameFromBarkRow(lead && lead.barkName);
     const roleIntro = buildRoleIntro(lead && lead.service);
@@ -911,63 +946,37 @@
       barkClientName: String((lead && lead.barkName) || "").trim(),
     };
 
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Bearer " + apiKey,
-      },
-      body: JSON.stringify({
-        model: model,
-        temperature: 0.7,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content:
-              "You write short, friendly outreach emails for " +
-              OUTREACH_SENDER +
-              " at " +
-              OUTREACH_COMPANY +
-              ". " +
-              "The goal is to introduce Thomas and respond to a Bark.com service request. " +
-              'Return valid JSON only with key "body" (no subject — subject is set separately). ' +
-              "body rules — plain text only, friendly and short:\n" +
-              "1) First line must be exactly greetingLine from the user JSON (Hi <name>, or Hi, if no name). Then one blank line.\n" +
-              "2) Next paragraph (single line): start with I'm " +
-              OUTREACH_SENDER +
-              ", then a comma and a space, then paste the exact roleIntro string from the user JSON.\n" +
-              "3) After that intro line, put one blank line (\\n\\n) before each following paragraph. " +
-              "Use 2–4 short paragraphs: acknowledge their Bark request, offer help, brief CTA. " +
-              "Do not run those into one wall of text; each paragraph is separated by \\n\\n from the next.\n" +
-              "4) After the last body paragraph, one blank line, then exactly:\nBest regards,\\n" +
-              OUTREACH_SENDER +
-              "\n5) No phone, website, HTML, or extra signature.",
-          },
-          {
-            role: "user",
-            content: JSON.stringify(userPayload),
-          },
-        ],
-      }),
+    const systemInstruction =
+      "You write short, friendly outreach emails for " +
+      OUTREACH_SENDER +
+      " at " +
+      OUTREACH_COMPANY +
+      ". " +
+      "The goal is to introduce Thomas and respond to a Bark.com service request. " +
+      'Return valid JSON only with key "body" (no subject — subject is set separately). ' +
+      "body rules — plain text only, friendly and short:\n" +
+      "1) First line must be exactly greetingLine from the user JSON (Hi <name>, or Hi, if no name). Then one blank line.\n" +
+      "2) Next paragraph (single line): start with I'm " +
+      OUTREACH_SENDER +
+      ", then a comma and a space, then paste the exact roleIntro string from the user JSON.\n" +
+      "3) After that intro line, put one blank line (\\n\\n) before each following paragraph. " +
+      "Use 2–4 short paragraphs: acknowledge their Bark request, offer help, brief CTA. " +
+      "Do not run those into one wall of text; each paragraph is separated by \\n\\n from the next.\n" +
+      "4) After the last body paragraph, one blank line, then exactly:\nBest regards,\\n" +
+      OUTREACH_SENDER +
+      "\n5) No phone, website, HTML, or extra signature.";
+
+    const content = await geminiGenerateContentViaBackground({
+      model: model,
+      systemInstruction: systemInstruction,
+      userText: JSON.stringify(userPayload),
+      temperature: 0.7,
+      responseMimeType: "application/json",
     });
 
-    if (!res.ok) {
-      let errText = "OpenAI request failed (" + res.status + ")";
-      try {
-        const errBody = await res.json();
-        if (errBody && errBody.error && errBody.error.message) errText = errBody.error.message;
-      } catch (e) {
-        /* ignore */
-      }
-      throw new Error(errText);
-    }
-
-    const data = await res.json();
-    const content = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-    const parsed = parseOpenAiJsonContent(content);
+    const parsed = parseGeminiJsonContent(content);
     let body = String(parsed.body || "").trim();
-    if (!body) throw new Error("OpenAI returned empty body");
+    if (!body) throw new Error("Gemini returned empty body");
     body = applyEmailGreeting(body, greetingFirstName);
     return { subject: subject, body: body };
   }
@@ -1001,7 +1010,7 @@
     return data;
   }
 
-  /** Auto Search: one OpenAI draft per cycle; one SMTP send per unique email address. */
+  /** Auto Search: one Gemini draft per cycle; one SMTP send per unique email address. */
   async function autoSendEmailsForNewContacts(token, sendPlans, statusEl) {
     const mail = await getMailRelaySettings();
     if (!mail.enabled || !sendPlans || !sendPlans.length) return { sent: 0, failed: 0 };
@@ -1020,7 +1029,7 @@
       if (statusEl) {
         showStatus(
           statusEl,
-          "Auto Search: drafting email (OpenAI) for " + batches.length + " unique address(es)…",
+          "Auto Search: drafting email (Gemini) for " + batches.length + " unique address(es)…",
           "info"
         );
       }
@@ -1286,6 +1295,7 @@
           names: Array.isArray(done.names) ? done.names : [],
           pageCount: done.pageCount,
           runId: done.runId,
+          error: done.geminiError || null,
         };
       }
       await new Promise((r) => setTimeout(r, 800));
@@ -1464,6 +1474,9 @@
           continue;
         }
         if (msg.action === "googleExtractionComplete") {
+          if (msg.error && (!msg.names || !msg.names.length)) {
+            throw new Error("Gemini: " + msg.error);
+          }
           return Array.isArray(msg.names) ? msg.names : [];
         }
       }
@@ -1819,6 +1832,28 @@
       if (emailGenerationModelEl) emailGenerationModelEl.disabled = !on;
     }
 
+    if (apiKeyEl) {
+      try {
+        const lsKey = localStorage.getItem("apiKey");
+        if (lsKey) apiKeyEl.value = lsKey;
+      } catch (e) {
+        /* ignore */
+      }
+      storageGet(["apiKey"]).then(function (o) {
+        const key = String(o.apiKey || "").trim();
+        if (key) {
+          apiKeyEl.value = key;
+          try {
+            localStorage.setItem("apiKey", key);
+          } catch (e2) {
+            /* ignore */
+          }
+        } else if (apiKeyEl.value.trim()) {
+          storageSet({ apiKey: apiKeyEl.value.trim() });
+        }
+      });
+    }
+
     if (sheetsTopNInput) {
       try {
         const lsTopN = localStorage.getItem("sheetsTopN");
@@ -1856,12 +1891,21 @@
       });
     }
 
-    storageGet(["autoSendEmailOnMatch", "mailRelayUrl", "mailRelaySecret", "emailGenerationModel"]).then(function (o) {
+    storageGet([
+      "autoSendEmailOnMatch",
+      "mailRelayUrl",
+      "mailRelaySecret",
+      "emailGenerationModel",
+    ]).then(function (o) {
       if (autoSendEmailOnMatchEl) autoSendEmailOnMatchEl.checked = o.autoSendEmailOnMatch === true;
       if (mailRelayUrlEl) mailRelayUrlEl.value = o.mailRelayUrl || DEFAULT_MAIL_RELAY_URL;
       if (mailRelaySecretEl) mailRelaySecretEl.value = o.mailRelaySecret || "";
+      const normalizedEmailModel = normalizeGeminiModel(o.emailGenerationModel);
+      if (o.emailGenerationModel && normalizedEmailModel !== o.emailGenerationModel) {
+        storageSet({ emailGenerationModel: normalizedEmailModel });
+      }
       if (emailGenerationModelEl) {
-        emailGenerationModelEl.value = o.emailGenerationModel || DEFAULT_EMAIL_MODEL;
+        emailGenerationModelEl.value = normalizedEmailModel;
       }
       updateMailRelayFieldsEnabled();
     });
@@ -1872,6 +1916,16 @@
 
     if (saveSettingsBtn) {
       saveSettingsBtn.addEventListener("click", async function () {
+        const key = apiKeyEl ? apiKeyEl.value.trim() : "";
+        if (key) {
+          try {
+            localStorage.setItem("apiKey", key);
+          } catch (e) {
+            /* ignore */
+          }
+          await storageSet({ apiKey: key });
+        }
+
         if (sheetsTopNInput) {
           const raw = sheetsTopNInput.value.trim();
           const n = parseInt(raw, 10);
@@ -1907,22 +1961,13 @@
           await storageSet({ autoSearchIntervalMinutes: clampedInterval });
         }
 
-        const key = apiKeyEl ? apiKeyEl.value.trim() : "";
-        if (key) {
-          try {
-            localStorage.setItem("apiKey", key);
-          } catch (e) {
-            /* ignore */
-          }
-          await storageSet({ apiKey: key });
-        }
-
         await storageSet({
           autoSendEmailOnMatch: !!(autoSendEmailOnMatchEl && autoSendEmailOnMatchEl.checked),
           mailRelayUrl: (mailRelayUrlEl && mailRelayUrlEl.value.trim()) || DEFAULT_MAIL_RELAY_URL,
           mailRelaySecret: mailRelaySecretEl ? mailRelaySecretEl.value.trim() : "",
-          emailGenerationModel:
-            (emailGenerationModelEl && emailGenerationModelEl.value.trim()) || DEFAULT_EMAIL_MODEL,
+          emailGenerationModel: normalizeGeminiModel(
+            (emailGenerationModelEl && emailGenerationModelEl.value.trim()) || DEFAULT_EMAIL_MODEL
+          ),
         });
 
         showSettingsSaveStatus("Settings saved.", "success");

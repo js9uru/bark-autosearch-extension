@@ -179,9 +179,9 @@
         <h2>Settings</h2>
 
         <div class="form-group">
-          <label for="apiKey">OpenAI API Key:</label>
-          <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off">
-          <small class="form-hint">Your API key is stored locally in your browser and never shared.</small>
+          <label for="apiKey">Google Gemini API Key:</label>
+          <input type="password" id="apiKey" placeholder="Paste your Gemini API key" autocomplete="off">
+          <small class="form-hint">From <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>. Stored locally in your browser.</small>
         </div>
 
         <div class="form-group">
@@ -209,7 +209,7 @@
         <h3>Auto-send email (ThatsThem match)</h3>
         <p class="form-hint" style="margin-bottom: 10px;">
           Run <code>python email_relay.py</code> in <code>bark-leads-scraper</code> with Gmail SMTP in <code>.env</code>.
-          During <strong>Auto Search</strong>, when a ThatsThem email match is found, OpenAI drafts the email body from the picked Bark row (service, location, Q&amp;A). The <strong>subject</strong> is built as <em>… Services in [city]</em> (e.g. Architectural Services in Milpitas). Sends via the relay.
+          During <strong>Auto Search</strong>, when a ThatsThem email match is found, Gemini drafts the email body from the picked Bark row (service, location, Q&amp;A). The <strong>subject</strong> is built as <em>… Services in [city]</em> (e.g. Architectural Services in Milpitas). Sends via the relay.
         </p>
 
         <div class="form-group">
@@ -234,8 +234,8 @@
 
         <div class="form-group">
           <label for="emailGenerationModel">Email generation model:</label>
-          <input type="text" id="emailGenerationModel" placeholder="gpt-4o-mini" autocomplete="off" disabled>
-          <small class="form-hint">OpenAI model for auto-send subject and body (uses your Settings API key).</small>
+          <input type="text" id="emailGenerationModel" placeholder="gemini-2.5-flash" autocomplete="off" disabled>
+          <small class="form-hint">Gemini model for auto-send email body (uses your Settings API key).</small>
         </div>
 
         <div class="form-group" style="margin-top: 8px;">
@@ -273,13 +273,13 @@
         </div>
 
         <div class="help-section">
-          <h3>OpenAI API Key</h3>
-          <p>To use the name extraction feature, you need to provide your OpenAI API key in the Settings page. The key
+          <h3>Google Gemini API Key</h3>
+          <p>To use the name extraction feature, you need to provide your Google Gemini API key in the Settings page. The key
             is stored locally in your browser and is used to extract names from search results.</p>
           <p><strong>How to get an API key:</strong></p>
           <ol class="help-list">
-            <li>Visit <a href="https://platform.openai.com/api-keys" target="_blank">OpenAI Platform</a></li>
-            <li>Sign in or create an account</li>
+            <li>Visit <a href="https://aistudio.google.com/apikey" target="_blank">Google AI Studio</a></li>
+            <li>Sign in with your Google account</li>
             <li>Create a new API key</li>
             <li>Copy the key, paste it on the Settings page, and click <strong>Save settings</strong></li>
           </ol>
@@ -288,7 +288,7 @@
         <div class="help-section">
           <h3>Usage Instructions</h3>
           <ol class="help-list">
-            <li>Go to the <strong>Settings</strong> page, enter your OpenAI API key, then click <strong>Save settings</strong></li>
+            <li>Go to the <strong>Settings</strong> page, enter your Gemini API key, then click <strong>Save settings</strong></li>
             <li>Fill in the search parameters (First Name, Email Pattern, City, State) or click "Apply Data from Bark" to apply data from Bark dashboard</li>
             <li>Navigate to a Google, ContactOut, or FastPeopleSearch page</li>
             <li>Click the appropriate extract button (Google, CO, or FPS)</li>
@@ -329,7 +329,7 @@
           <p>If you encounter any issues or have questions, please check that:</p>
           <ul class="help-list">
             <li><strong>Auto Search top N:</strong> In Settings, <em>Bark_Leads rows to scan</em> limits how many sheet rows Auto Search considers when picking the next Todo lead.</li>
-            <li>Your OpenAI API key is correctly entered in Settings</li>
+            <li>Your Gemini API key is correctly entered in Settings</li>
             <li>You have sufficient API credits</li>
             <li>You are on the correct website when extracting names</li>
           </ul>

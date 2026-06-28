@@ -4,7 +4,7 @@ Chrome sidepanel extension to automate lead lookups and write results back to Go
 
 ### Features
 
-- **Google**: Extract full names from Google search results (uses OpenAI).
+- **Google**: Extract full names from Google search results (uses Google Gemini).
 - **Search ThatsThem**: For each name, open ThatsThem and find matching **emails/phones** (supports masked/redacted rows).
 - **Auto Search** (Google Sheets queue):
   - Reads the top N rows and picks the first `Status = Todo`
@@ -31,9 +31,9 @@ Then share your Google Sheet with the service account email (Editor permission).
 
 Security note: keep `service_account.json` local only (it is ignored by `.gitignore`).
 
-### Settings (OpenAI key)
+### Settings (Gemini API key)
 
-Go to the extension **Settings** tab, enter your OpenAI API key, and click **Save settings**. This is required for the **Google** name extraction.
+Go to the extension **Settings** tab, enter your Google Gemini API key, and click **Save settings**. This is required for the **Google** name extraction.
 
 ### Auto Search (how it works)
 
