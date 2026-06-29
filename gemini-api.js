@@ -41,7 +41,8 @@
       '", perform the following steps, returning only the required JSON (do not include code blocks or extra explanation):\n' +
       "1. Find all unique combinations of first and last names where either the first name or last name exactly matches \"" +
       token +
-      '". Ignore any middle names, initials, prefixes, or suffixes.\n' +
+      '". Consider common nicknames, diminutives, abbreviations, and formal versions of first names as equivalent' +
+      ". Ignore any middle names, initials, prefixes, or suffixes.\n" +
       '2. Standardize each result to "First Last" format (do not include middle names).\n' +
       '3. Output the result as: {"names": ["First Last", ...]}\n' +
       'Return only the JSON object as your output, with no surrounding text or formatting. If there are no matches, return {"names": []}'
