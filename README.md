@@ -40,7 +40,7 @@ Go to the extension **Settings** tab, enter your Google Gemini API key, and clic
 #### 1) Pick a lead row from Google Sheets
 
 - Reads the **top N** rows from the configured source sheet tab (N is configurable in Settings; default 150).
-- Finds the first row where `Status` is `Todo`, or the first `No found` row in that range that has been searched fewer than the configured max (default 3).
+- Finds the first row where `Status` is `Todo`, or the eligible `No found` row in that range with the **lowest search count** (fewest prior searches), among rows below the configured max (default 3).
 - Updates that row’s status to `In progress`.
 
 #### 2) Build search criteria

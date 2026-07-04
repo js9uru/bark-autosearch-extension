@@ -754,6 +754,7 @@
     }
 
     if (!pickedRowNumber) {
+      let bestPrior = Infinity;
       for (let i = 1; i < values.length; i++) {
         const row = values[i] || [];
         const status = idx.statusIdx < row.length ? String(row[idx.statusIdx] || "").trim() : "";
@@ -763,12 +764,13 @@
         const fromStorage = typeof attemptsMap[fp] === "number" ? attemptsMap[fp] : 0;
         const fromCell = parseRowSearchCount(row, status, idx.searchCountIdx);
         const prior = Math.max(fromStorage, fromCell);
-        if (prior > 0 && prior < noFoundRescanMax) {
+        if (prior <= 0 || prior >= noFoundRescanMax) continue;
+        if (prior < bestPrior) {
+          bestPrior = prior;
           pickedRowNumber = i + 1;
           pickedRow = row;
           pickKind = "rescan";
           priorSearchCount = prior;
-          break;
         }
       }
     }

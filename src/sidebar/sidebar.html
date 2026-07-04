@@ -200,7 +200,7 @@
         <div class="form-group" style="margin-top: 16px;">
           <label for="noFoundRescanMax">No found rescans (max searches):</label>
           <input type="number" id="noFoundRescanMax" min="1" max="20" step="1" value="3" autocomplete="off">
-          <small class="form-hint">After a lead is marked No found, Auto Search may retry it up to this many total searches. The count is written in the column immediately to the right of Status (or a <code>Searches</code> column if present). Todo rows are always picked first.</small>
+          <small class="form-hint">After a lead is marked No found, Auto Search may retry it up to this many total searches. The count is written in the column immediately to the right of Status (or a <code>Searches</code> column if present). Todo rows are always picked first; among No found rows, the one with the lowest search count is picked next.</small>
         </div>
 
         <div class="form-group" style="margin-top: 16px;">
