@@ -4,7 +4,10 @@
 (function () {
   const DEFAULT_AUTO_SEARCH_INTERVAL_MINUTES = 2;
   const DEFAULT_SHEETS_TOP_N = 150;
+  const DEFAULT_NO_FOUND_RESCAN_MAX = 3;
+  const LEAD_SEARCH_ATTEMPTS_KEY = "leadSearchAttempts";
   let autoSearchIntervalMinutes = DEFAULT_AUTO_SEARCH_INTERVAL_MINUTES;
+  let noFoundRescanMax = DEFAULT_NO_FOUND_RESCAN_MAX;
 
   function parseAutoSearchIntervalMinutes(raw) {
     const n = parseInt(String(raw), 10);
@@ -25,11 +28,120 @@
     const m = autoSearchIntervalMinutes;
     return m === 1 ? "1 minute" : m + " minutes";
   }
+
+  function parseNoFoundRescanMax(raw) {
+    const n = parseInt(String(raw), 10);
+    if (!Number.isFinite(n) || n < 1) return DEFAULT_NO_FOUND_RESCAN_MAX;
+    return Math.min(20, Math.max(1, n));
+  }
+
+  function applyNoFoundRescanMax(n) {
+    noFoundRescanMax = parseNoFoundRescanMax(n);
+    return noFoundRescanMax;
+  }
+
+  function leadFingerprint(rec) {
+    const rn = (s) => String(s || "").trim().toLowerCase();
+    return [rn(rec && rec.name), rn(rec && rec.location), rn(rec && rec.phone)].join("|");
+  }
+
+  function isNoFoundStatus(status) {
+    return /^no found\b/i.test(String(status || "").trim());
+  }
+
+  function parseStatusSearchCount(status) {
+    const s = String(status || "").trim();
+    const noFoundMatch = s.match(/^No found\s*\((\d+)\)\s*$/i);
+    if (noFoundMatch) return parseInt(noFoundMatch[1], 10);
+    if (/^No found\s*$/i.test(s)) return 1;
+    const foundMatch = s.match(/^Found\s*\((\d+)\)\s*$/i);
+    if (foundMatch) return parseInt(foundMatch[1], 10);
+    return 0;
+  }
+
+  function parseRowSearchCount(row, status, searchCountIdx) {
+    if (searchCountIdx >= 0 && row && searchCountIdx < row.length) {
+      const raw = String(row[searchCountIdx] || "").trim();
+      if (raw !== "") {
+        const n = parseInt(raw, 10);
+        if (Number.isFinite(n) && n >= 0) return n;
+      }
+    }
+    return parseStatusSearchCount(status);
+  }
+
+  function resolveSearchCountIdx(header, statusIdx) {
+    const h = (header || []).map((x) => String(x || "").trim());
+    const named = h.indexOf(SHEETS_CONFIG.searchCountColName);
+    if (named >= 0) return named;
+    if (statusIdx >= 0) return statusIdx + 1;
+    return -1;
+  }
+
+  function statusUpdateRangeForRow(sheetQuoted, rowNumber, statusIdx, searchCountIdx) {
+    const row = String(rowNumber);
+    const statusCol = colNumToA1(statusIdx + 1);
+    if (searchCountIdx >= 0 && searchCountIdx !== statusIdx) {
+      const countCol = colNumToA1(searchCountIdx + 1);
+      return sheetQuoted + "!" + statusCol + row + ":" + countCol + row;
+    }
+    return sheetQuoted + "!" + statusCol + row;
+  }
+
+  function statusUpdateRowValues(baseStatus, searchCount, searchCountIdx) {
+    const status = String(baseStatus || "").trim();
+    if (searchCountIdx >= 0) return [[status, searchCount]];
+    return [[status]];
+  }
+
+  function barkLeadsColumnIndices(header) {
+    const h = (header || []).map((x) => String(x || "").trim());
+    const statusIdx = h.indexOf(SHEETS_CONFIG.statusColName);
+    return {
+      statusIdx: statusIdx,
+      searchCountIdx: resolveSearchCountIdx(h, statusIdx),
+      nameIdx: h.indexOf(SHEETS_CONFIG.nameColName),
+      locationIdx: h.indexOf(SHEETS_CONFIG.locationColName),
+      phoneIdx: h.indexOf(SHEETS_CONFIG.phoneColName),
+      emailIdx: h.indexOf(SHEETS_CONFIG.emailColName),
+      serviceIdx: h.indexOf(SHEETS_CONFIG.serviceColName),
+      verifiedIdx: h.indexOf(SHEETS_CONFIG.verifiedPhoneColName),
+      detailsIdx: h.indexOf(SHEETS_CONFIG.detailsColName),
+    };
+  }
+
+  function rowToBarkLeadRecord(row, idx) {
+    const g = (i) => (i >= 0 && row && i < row.length ? String(row[i] || "").trim() : "");
+    return {
+      name: g(idx.nameIdx),
+      location: g(idx.locationIdx),
+      phone: g(idx.phoneIdx),
+      email: g(idx.emailIdx),
+      service: g(idx.serviceIdx),
+      verifiedPhone: g(idx.verifiedIdx),
+      details: g(idx.detailsIdx),
+    };
+  }
+
+  async function getLeadSearchAttemptsMap() {
+    const o = await storageGet([LEAD_SEARCH_ATTEMPTS_KEY]);
+    const m = o[LEAD_SEARCH_ATTEMPTS_KEY];
+    return m && typeof m === "object" ? m : {};
+  }
+
+  async function setLeadSearchAttempt(rec, count) {
+    const fp = leadFingerprint(rec);
+    const map = await getLeadSearchAttemptsMap();
+    map[fp] = count;
+    await storageSet({ [LEAD_SEARCH_ATTEMPTS_KEY]: map });
+  }
+
   const SHEETS_CONFIG = {
     spreadsheetId: "1NrE9HZ9LjNg2SxSCEwO1bFr35ADn9F0oq1fP2dD3Xsk",
     sheetTab: "Bark_Leads",
     topN: DEFAULT_SHEETS_TOP_N,
     statusColName: "Status",
+    searchCountColName: "Searches",
     todoValue: "Todo",
     inProgressValue: "In progress",
     foundValue: "Found",
@@ -607,7 +719,7 @@
     return s;
   }
 
-  async function pickFirstTodoAndMarkInProgress() {
+  async function pickNextLeadForAutoSearch() {
     const sa = await loadServiceAccountJson();
     const token = await getServiceAccountAccessToken(sa);
 
@@ -619,47 +731,72 @@
     if (!values.length) return { picked: false, reason: "Sheet is empty" };
 
     const header = (values[0] || []).map((h) => String(h || "").trim());
-    const statusIdx = header.indexOf(SHEETS_CONFIG.statusColName);
-    if (statusIdx < 0) return { picked: false, reason: "Missing Status column" };
+    const idx = barkLeadsColumnIndices(header);
+    if (idx.statusIdx < 0) return { picked: false, reason: "Missing Status column" };
 
-    const nameIdx = header.indexOf(SHEETS_CONFIG.nameColName);
-    const locationIdx = header.indexOf(SHEETS_CONFIG.locationColName);
-    const phoneIdx = header.indexOf(SHEETS_CONFIG.phoneColName);
-    const emailIdx = header.indexOf(SHEETS_CONFIG.emailColName);
-    const serviceIdx = header.indexOf(SHEETS_CONFIG.serviceColName);
-    const verifiedIdx = header.indexOf(SHEETS_CONFIG.verifiedPhoneColName);
-    const detailsIdx = header.indexOf(SHEETS_CONFIG.detailsColName);
+    const attemptsMap = await getLeadSearchAttemptsMap();
 
     let pickedRowNumber = null;
     let pickedRow = null;
+    let pickKind = "todo";
+    let priorSearchCount = 0;
+
     for (let i = 1; i < values.length; i++) {
       const row = values[i] || [];
-      const status = statusIdx < row.length ? String(row[statusIdx] || "").trim() : "";
+      const status = idx.statusIdx < row.length ? String(row[idx.statusIdx] || "").trim() : "";
       if (status.toLowerCase() === SHEETS_CONFIG.todoValue.toLowerCase()) {
-        pickedRowNumber = i + 1; // because values[0] is row 1 header
+        pickedRowNumber = i + 1;
         pickedRow = row;
+        pickKind = "todo";
+        priorSearchCount = 0;
         break;
       }
     }
 
-    if (!pickedRowNumber) return { picked: false, reason: "No Todo rows in top " + SHEETS_CONFIG.topN };
+    if (!pickedRowNumber) {
+      for (let i = 1; i < values.length; i++) {
+        const row = values[i] || [];
+        const status = idx.statusIdx < row.length ? String(row[idx.statusIdx] || "").trim() : "";
+        if (!isNoFoundStatus(status)) continue;
+        const recProbe = rowToBarkLeadRecord(row, idx);
+        const fp = leadFingerprint(recProbe);
+        const fromStorage = typeof attemptsMap[fp] === "number" ? attemptsMap[fp] : 0;
+        const fromCell = parseRowSearchCount(row, status, idx.searchCountIdx);
+        const prior = Math.max(fromStorage, fromCell);
+        if (prior > 0 && prior < noFoundRescanMax) {
+          pickedRowNumber = i + 1;
+          pickedRow = row;
+          pickKind = "rescan";
+          priorSearchCount = prior;
+          break;
+        }
+      }
+    }
 
-    const colA1 = colNumToA1(statusIdx + 1);
+    if (!pickedRowNumber) {
+      return {
+        picked: false,
+        reason:
+          "No Todo or eligible No found rows in top " +
+          SHEETS_CONFIG.topN +
+          " (No found rescans up to " +
+          noFoundRescanMax +
+          " searches)",
+      };
+    }
+
+    const colA1 = colNumToA1(idx.statusIdx + 1);
     const cellRange = a1QuoteSheetTitle(SHEETS_CONFIG.sheetTab) + "!" + colA1 + String(pickedRowNumber);
     await sheetsValuesUpdate(token, cellRange, [[SHEETS_CONFIG.inProgressValue]]);
-    const rec = {
-      name: nameIdx >= 0 && pickedRow && nameIdx < pickedRow.length ? String(pickedRow[nameIdx] || "").trim() : "",
-      location:
-        locationIdx >= 0 && pickedRow && locationIdx < pickedRow.length ? String(pickedRow[locationIdx] || "").trim() : "",
-      phone: phoneIdx >= 0 && pickedRow && phoneIdx < pickedRow.length ? String(pickedRow[phoneIdx] || "").trim() : "",
-      email: emailIdx >= 0 && pickedRow && emailIdx < pickedRow.length ? String(pickedRow[emailIdx] || "").trim() : "",
-      service: serviceIdx >= 0 && pickedRow && serviceIdx < pickedRow.length ? String(pickedRow[serviceIdx] || "").trim() : "",
-      verifiedPhone:
-        verifiedIdx >= 0 && pickedRow && verifiedIdx < pickedRow.length ? String(pickedRow[verifiedIdx] || "").trim() : "",
-      details:
-        detailsIdx >= 0 && pickedRow && detailsIdx < pickedRow.length ? String(pickedRow[detailsIdx] || "").trim() : "",
+    const rec = rowToBarkLeadRecord(pickedRow, idx);
+    return {
+      picked: true,
+      row: pickedRowNumber,
+      range: cellRange,
+      record: rec,
+      pickKind: pickKind,
+      priorSearchCount: priorSearchCount,
     };
-    return { picked: true, row: pickedRowNumber, range: cellRange, record: rec };
   }
 
   /** Scan enough rows to find the lead we marked In progress after top inserts may have shifted row numbers. */
@@ -691,18 +828,17 @@
       return true;
     };
 
-    const sheetQuoted = a1QuoteSheetTitle(SHEETS_CONFIG.sheetTab);
-    const statusCol = colNumToA1(statusIdx + 1);
-
     for (let i = 1; i < values.length; i++) {
       const row = values[i] || [];
       const st = statusIdx < row.length ? rn(row[statusIdx]).toLowerCase() : "";
       if (st !== wantStatus) continue;
       if (!rowMatchesRecord(row)) continue;
       const sheetRowNum = i + 1;
+      const searchCountIdx = resolveSearchCountIdx(header, statusIdx);
       return {
-        range: sheetQuoted + "!" + statusCol + String(sheetRowNum),
         rowNumber: sheetRowNum,
+        statusIdx: statusIdx,
+        searchCountIdx: searchCountIdx,
       };
     }
     return null;
@@ -1576,6 +1712,12 @@
     });
   }
 
+  function loadNoFoundRescanMaxFromStorage() {
+    return storageGet(["noFoundRescanMax"]).then(function (o) {
+      return applyNoFoundRescanMax(o.noFoundRescanMax);
+    });
+  }
+
   function notifyContactAdded(opts) {
     const name = opts && opts.name ? String(opts.name) : "";
     const emailCount = opts && typeof opts.emailCount === "number" ? opts.emailCount : null;
@@ -1831,6 +1973,7 @@
 
   ready(function () {
     const sheetsTopNInput = document.getElementById("sheetsTopN");
+    const noFoundRescanMaxInput = document.getElementById("noFoundRescanMax");
     const autoSearchIntervalMinutesEl = document.getElementById("autoSearchIntervalMinutes");
     const settingsStatusEl = document.getElementById("settingsStatus");
     const apiKeyEl = document.getElementById("apiKey");
@@ -1890,6 +2033,24 @@
         sheetsTopNInput.value = String(n);
         try {
           localStorage.setItem("sheetsTopN", String(n));
+        } catch (e2) {
+          /* ignore */
+        }
+      });
+    }
+
+    if (noFoundRescanMaxInput) {
+      try {
+        const lsRescan = localStorage.getItem("noFoundRescanMax");
+        if (lsRescan) applyNoFoundRescanMax(lsRescan);
+        noFoundRescanMaxInput.value = String(noFoundRescanMax);
+      } catch (e) {
+        /* ignore */
+      }
+      loadNoFoundRescanMaxFromStorage().then(function (n) {
+        noFoundRescanMaxInput.value = String(n);
+        try {
+          localStorage.setItem("noFoundRescanMax", String(n));
         } catch (e2) {
           /* ignore */
         }
@@ -1966,6 +2127,23 @@
             /* ignore */
           }
           await storageSet({ sheetsTopN: clamped });
+        }
+
+        if (noFoundRescanMaxInput) {
+          const rawRescan = noFoundRescanMaxInput.value.trim();
+          const rescanN = parseInt(rawRescan, 10);
+          if (!rawRescan || !Number.isFinite(rescanN) || rescanN < 1) {
+            showSettingsSaveStatus("No found rescans: enter a whole number at least 1.", "error");
+            return;
+          }
+          const clampedRescan = applyNoFoundRescanMax(rescanN);
+          noFoundRescanMaxInput.value = String(clampedRescan);
+          try {
+            localStorage.setItem("noFoundRescanMax", String(clampedRescan));
+          } catch (e) {
+            /* ignore */
+          }
+          await storageSet({ noFoundRescanMax: clampedRescan });
         }
 
         if (autoSearchIntervalMinutesEl) {
@@ -2320,13 +2498,25 @@
           }
           // Clear previous cycle results before starting a new one.
           if (resultsEl) resultsEl.innerHTML = "";
-          showStatus(statusEl, "Auto Search: checking Google Sheet for Todo…", "info");
-          const res = await pickFirstTodoAndMarkInProgress();
+          showStatus(statusEl, "Auto Search: checking Google Sheet for Todo or No found…", "info");
+          const res = await pickNextLeadForAutoSearch();
           if (!res.picked) {
             showStatus(statusEl, "Auto Search: " + res.reason, "error");
             return;
           }
           const rec = res.record || {};
+          const searchAttemptNumber = (res.priorSearchCount || 0) + 1;
+          if (res.pickKind === "rescan") {
+            showStatus(
+              statusEl,
+              "Auto Search: rescanning No found lead (search " +
+                searchAttemptNumber +
+                " of " +
+                noFoundRescanMax +
+                ")…",
+              "info"
+            );
+          }
           const loc = normalizeLocationCityStateZip(rec.location);
           const criteria = `${String(rec.name || "").trim()} living in ${loc.display || rec.location}; ${areaCodePrefix(rec.phone)}`;
 
@@ -2464,7 +2654,7 @@
           try {
             const sa3 = await loadServiceAccountJson();
             const token3 = await getServiceAccountAccessToken(sa3);
-            const statusValue = matched.length > 0 ? SHEETS_CONFIG.foundValue : SHEETS_CONFIG.notFoundValue;
+            const baseStatus = matched.length > 0 ? SHEETS_CONFIG.foundValue : SHEETS_CONFIG.notFoundValue;
             const resolved = await findStatusCellRangeForInProgressLead(token3, rec);
             if (!resolved) {
               showStatus(
@@ -2473,7 +2663,20 @@
                 "error"
               );
             } else {
-              await sheetsValuesUpdate(token3, resolved.range, [[statusValue]]);
+              const sheetQuoted = a1QuoteSheetTitle(SHEETS_CONFIG.sheetTab);
+              const updateRange = statusUpdateRangeForRow(
+                sheetQuoted,
+                resolved.rowNumber,
+                resolved.statusIdx,
+                resolved.searchCountIdx
+              );
+              const updateValues = statusUpdateRowValues(
+                baseStatus,
+                searchAttemptNumber,
+                resolved.searchCountIdx
+              );
+              await sheetsValuesUpdate(token3, updateRange, updateValues);
+              await setLeadSearchAttempt(rec, searchAttemptNumber);
               statusResolvedRow = resolved.rowNumber;
             }
           } catch (e) {

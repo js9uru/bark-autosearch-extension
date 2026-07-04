@@ -7,12 +7,12 @@ Chrome sidepanel extension to automate lead lookups and write results back to Go
 - **Google**: Extract full names from Google search results (uses Google Gemini).
 - **Search ThatsThem**: For each name, open ThatsThem and find matching **emails/phones** (supports masked/redacted rows).
 - **Auto Search** (Google Sheets queue):
-  - Reads the top N rows and picks the first `Status = Todo`
+  - Reads the top N rows and picks the first `Status = Todo`, or an eligible `No found` row for rescan
   - Sets it to `In progress`
   - Builds a search criteria string and runs Google name extraction
   - Runs ThatsThem matching for extracted names
   - Writes matched contacts to `Bark_Contacts`
-  - Updates the original row `Status` to `Found` / `No found`
+  - Updates the original row `Status` to `Found` / `No found` and writes the search count in the column to the right
 
 ### Install / Load
 
@@ -39,8 +39,8 @@ Go to the extension **Settings** tab, enter your Google Gemini API key, and clic
 
 #### 1) Pick a lead row from Google Sheets
 
-- Reads **top 100** rows from the configured source sheet tab.
-- Finds the first row where `Status` is `Todo`.
+- Reads the **top N** rows from the configured source sheet tab (N is configurable in Settings; default 150).
+- Finds the first row where `Status` is `Todo`, or the first `No found` row in that range that has been searched fewer than the configured max (default 3).
 - Updates that row’s status to `In progress`.
 
 #### 2) Build search criteria
@@ -78,8 +78,10 @@ If matches were found:
 
 #### 6) Update original row status
 
-- If contacts were written: `In progress` → `Found`
-- If no matches: `In progress` → `No found`
+- If contacts were written: `In progress` → `Found` (Status column)
+- If no matches: `In progress` → `No found` (Status column)
+- The total number of searches for that lead is written in the **column immediately to the right of Status** (or a `Searches` column if your sheet has that header).
+- After the count reaches the **No found rescans** limit in Settings, that lead is no longer picked for rescan.
 
 ### Auto Search scheduling + stop behavior
 
