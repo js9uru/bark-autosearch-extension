@@ -71,11 +71,28 @@
   }
 
   function resolveSearchCountIdx(header, statusIdx) {
+    if (statusIdx < 0) return -1;
     const h = (header || []).map((x) => String(x || "").trim());
+    const adjacent = statusIdx + 1;
+    const adjacentHeader = adjacent < h.length ? h[adjacent] : "";
+    if (!adjacentHeader || adjacentHeader === SHEETS_CONFIG.searchCountColName) {
+      return adjacent;
+    }
     const named = h.indexOf(SHEETS_CONFIG.searchCountColName);
     if (named >= 0) return named;
-    if (statusIdx >= 0) return statusIdx + 1;
-    return -1;
+    return adjacent;
+  }
+
+  function resolvePriorSearchCount(status, countColValue, attemptsMap, recProbe) {
+    const raw = String(countColValue == null ? "" : countColValue).trim();
+    if (raw !== "") {
+      const n = parseInt(raw, 10);
+      if (Number.isFinite(n) && n >= 0) return n;
+    }
+    const fp = leadFingerprint(recProbe);
+    const fromStorage = typeof attemptsMap[fp] === "number" ? attemptsMap[fp] : 0;
+    if (fromStorage > 0) return fromStorage;
+    return parseStatusSearchCount(status);
   }
 
   function statusUpdateRangeForRow(sheetQuoted, rowNumber, statusIdx, searchCountIdx) {
@@ -720,6 +737,8 @@
   }
 
   async function pickNextLeadForAutoSearch() {
+    await loadAutoSearchSheetSettingsFromStorage();
+
     const sa = await loadServiceAccountJson();
     const token = await getServiceAccountAccessToken(sa);
 
@@ -735,11 +754,15 @@
     if (idx.statusIdx < 0) return { picked: false, reason: "Missing Status column" };
 
     const attemptsMap = await getLeadSearchAttemptsMap();
+    const searchCountColValues =
+      idx.searchCountIdx >= 0 ? await fetchSheetColumnValues(token, idx.searchCountIdx, maxRow) : [];
 
     let pickedRowNumber = null;
     let pickedRow = null;
     let pickKind = "todo";
     let priorSearchCount = 0;
+    let noFoundSeen = 0;
+    let noFoundEligible = 0;
 
     for (let i = 1; i < values.length; i++) {
       const row = values[i] || [];
@@ -759,12 +782,12 @@
         const row = values[i] || [];
         const status = idx.statusIdx < row.length ? String(row[idx.statusIdx] || "").trim() : "";
         if (!isNoFoundStatus(status)) continue;
+        noFoundSeen++;
         const recProbe = rowToBarkLeadRecord(row, idx);
-        const fp = leadFingerprint(recProbe);
-        const fromStorage = typeof attemptsMap[fp] === "number" ? attemptsMap[fp] : 0;
-        const fromCell = parseRowSearchCount(row, status, idx.searchCountIdx);
-        const prior = Math.max(fromStorage, fromCell);
+        const countColValue = searchCountColValues[i - 1];
+        const prior = resolvePriorSearchCount(status, countColValue, attemptsMap, recProbe);
         if (prior <= 0 || prior >= noFoundRescanMax) continue;
+        noFoundEligible++;
         if (prior < bestPrior) {
           bestPrior = prior;
           pickedRowNumber = i + 1;
@@ -776,15 +799,19 @@
     }
 
     if (!pickedRowNumber) {
-      return {
-        picked: false,
-        reason:
-          "No Todo or eligible No found rows in top " +
-          SHEETS_CONFIG.topN +
-          " (No found rescans up to " +
-          noFoundRescanMax +
-          " searches)",
-      };
+      let reason =
+        "No Todo or eligible No found rows in top " +
+        SHEETS_CONFIG.topN +
+        " (No found rescans up to " +
+        noFoundRescanMax +
+        " searches)";
+      if (noFoundSeen > 0 && noFoundEligible === 0) {
+        reason +=
+          ". Found " +
+          noFoundSeen +
+          " No found row(s) in that range, but all have reached the max search count.";
+      }
+      return { picked: false, reason: reason };
     }
 
     const colA1 = colNumToA1(idx.statusIdx + 1);
@@ -1718,6 +1745,27 @@
     return storageGet(["noFoundRescanMax"]).then(function (o) {
       return applyNoFoundRescanMax(o.noFoundRescanMax);
     });
+  }
+
+  async function loadAutoSearchSheetSettingsFromStorage() {
+    const o = await storageGet(["sheetsTopN", "noFoundRescanMax"]);
+    applySheetsTopN(o.sheetsTopN);
+    applyNoFoundRescanMax(o.noFoundRescanMax);
+  }
+
+  async function fetchSheetColumnValues(token, colIdx, maxSheetRow) {
+    if (colIdx < 0 || maxSheetRow < 2) return [];
+    const col = colNumToA1(colIdx + 1);
+    const range =
+      a1QuoteSheetTitle(SHEETS_CONFIG.sheetTab) + "!" + col + "2:" + col + String(maxSheetRow);
+    const data = await sheetsValuesGet(token, range);
+    const rows = data.values || [];
+    const out = [];
+    for (let i = 0; i < maxSheetRow - 1; i++) {
+      const cell = rows[i] && rows[i].length ? rows[i][0] : "";
+      out.push(cell == null ? "" : cell);
+    }
+    return out;
   }
 
   function notifyContactAdded(opts) {
