@@ -40,9 +40,15 @@
     return noFoundRescanMax;
   }
 
+  function normalizeProjectId(v) {
+    return String(v == null ? "" : v).trim();
+  }
+
   function leadFingerprint(rec) {
+    const pid = normalizeProjectId(rec && rec.projectId);
+    if (pid) return "pid:" + pid;
     const rn = (s) => String(s || "").trim().toLowerCase();
-    return [rn(rec && rec.name), rn(rec && rec.location), rn(rec && rec.phone)].join("|");
+    return "legacy:" + [rn(rec && rec.name), rn(rec && rec.location), rn(rec && rec.phone)].join("|");
   }
 
   function isNoFoundStatus(status) {
@@ -117,6 +123,7 @@
     return {
       statusIdx: statusIdx,
       searchCountIdx: resolveSearchCountIdx(h, statusIdx),
+      projectIdIdx: h.indexOf(SHEETS_CONFIG.projectIdColName),
       nameIdx: h.indexOf(SHEETS_CONFIG.nameColName),
       locationIdx: h.indexOf(SHEETS_CONFIG.locationColName),
       phoneIdx: h.indexOf(SHEETS_CONFIG.phoneColName),
@@ -130,6 +137,7 @@
   function rowToBarkLeadRecord(row, idx) {
     const g = (i) => (i >= 0 && row && i < row.length ? String(row[i] || "").trim() : "");
     return {
+      projectId: g(idx.projectIdIdx),
       name: g(idx.nameIdx),
       location: g(idx.locationIdx),
       phone: g(idx.phoneIdx),
@@ -163,8 +171,10 @@
     inProgressValue: "In progress",
     foundValue: "Found",
     notFoundValue: "No found",
+    projectIdColName: "Project ID",
     nameColName: "Name",
     locationColName: "Location",
+    addedAtColName: "Added At",
     phoneColName: "Phone",
     emailColName: "Email",
     serviceColName: "Service",
@@ -176,6 +186,7 @@
   };
 
   const CONTACTS_HEADER = [
+    "Project ID",
     "Name",
     "Service",
     "Location",
@@ -592,12 +603,30 @@
     return key < addedAtCutoffDateKey(retentionDays);
   }
 
+  async function fetchColumnValuesByHeader(token, sheetTab, colName, startRow, endRow) {
+    const tabQuoted = a1QuoteSheetTitle(sheetTab);
+    const headerData = await sheetsValuesGet(token, tabQuoted + "!1:1");
+    const header = ((headerData.values && headerData.values[0]) || []).map((h) => String(h || "").trim());
+    const idx = header.indexOf(colName);
+    if (idx < 0) return { values: [], missing: true };
+    const col = colNumToA1(idx + 1);
+    const range = tabQuoted + "!" + col + String(startRow) + ":" + col + String(endRow);
+    const data = await sheetsValuesGet(token, range);
+    return { values: (data && data.values) || [], missing: false };
+  }
+
   async function pruneOldContactRows(token, contactsSheetId, retentionDays) {
-    const range = a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab) + "!H2:H10000";
     let values = [];
     try {
-      const data = await sheetsValuesGet(token, range);
-      values = (data && data.values) || [];
+      const col = await fetchColumnValuesByHeader(
+        token,
+        SHEETS_CONFIG.contactsTab,
+        SHEETS_CONFIG.addedAtColName,
+        2,
+        10000
+      );
+      if (col.missing) return 0;
+      values = col.values;
     } catch (e) {
       console.warn("Bark_Contacts: could not read Added At for pruning", e);
       return 0;
@@ -687,21 +716,31 @@
   }
 
   async function refreshBarkStatistics(token) {
-    const leadsRange = a1QuoteSheetTitle(SHEETS_CONFIG.sheetTab) + "!H2:H10000";
-    const contactsRange = a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab) + "!H2:H10000";
     let leadsValues = [];
     let contactsValues = [];
     try {
-      const lr = await sheetsValuesGet(token, leadsRange);
-      leadsValues = lr.values || [];
+      const lr = await fetchColumnValuesByHeader(
+        token,
+        SHEETS_CONFIG.sheetTab,
+        SHEETS_CONFIG.addedAtColName,
+        2,
+        10000
+      );
+      if (!lr.missing) leadsValues = lr.values;
     } catch (e) {
-      console.warn("Bark_Statistics: could not read Bark_Leads column H", e);
+      console.warn("Bark_Statistics: could not read Bark_Leads Added At column", e);
     }
     try {
-      const cr = await sheetsValuesGet(token, contactsRange);
-      contactsValues = cr.values || [];
+      const cr = await fetchColumnValuesByHeader(
+        token,
+        SHEETS_CONFIG.contactsTab,
+        SHEETS_CONFIG.addedAtColName,
+        2,
+        10000
+      );
+      if (!cr.missing) contactsValues = cr.values;
     } catch (e) {
-      console.warn("Bark_Statistics: could not read Bark_Contacts column H", e);
+      console.warn("Bark_Statistics: could not read Bark_Contacts Added At column", e);
     }
     const leadCounts = countDatesFromColumnValues(leadsValues);
     const contactCounts = countDatesFromColumnValues(contactsValues);
@@ -845,11 +884,16 @@
     const locationIdx = header.indexOf(SHEETS_CONFIG.locationColName);
     const phoneIdx = header.indexOf(SHEETS_CONFIG.phoneColName);
     const emailIdx = header.indexOf(SHEETS_CONFIG.emailColName);
+    const projectIdIdx = header.indexOf(SHEETS_CONFIG.projectIdColName);
 
     const wantStatus = SHEETS_CONFIG.inProgressValue.toLowerCase();
     const rn = (s) => String(s || "").trim();
     const rowMatchesRecord = (row) => {
       const g = (idx) => (idx >= 0 && idx < row.length ? rn(row[idx]) : "");
+      const recProjectId = normalizeProjectId(rec.projectId);
+      if (recProjectId) {
+        return projectIdIdx >= 0 && g(projectIdIdx) === recProjectId;
+      }
       if (nameIdx >= 0 && g(nameIdx) !== rn(rec.name)) return false;
       if (locationIdx >= 0 && g(locationIdx) !== rn(rec.location)) return false;
       if (phoneIdx >= 0 && g(phoneIdx) !== rn(rec.phone)) return false;
@@ -950,6 +994,32 @@
 
     await sheetsValuesUpdate(token, a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab) + "!A1", [CONTACTS_HEADER.slice()]);
     return { sheetId: sheetId, created: true };
+  }
+
+  async function ensureContactsProjectIdHeader(token, contactsSheetId) {
+    const tab = a1QuoteSheetTitle(SHEETS_CONFIG.contactsTab);
+    const data = await sheetsValuesGet(token, tab + "!1:1");
+    const row = (data.values && data.values[0]) || [];
+    const header = row.map((h) => String(h || "").trim());
+    if (header.indexOf(SHEETS_CONFIG.projectIdColName) >= 0) return;
+    if (!header.length) {
+      await sheetsValuesUpdate(token, tab + "!A1", [CONTACTS_HEADER.slice()]);
+      return;
+    }
+    await sheetsBatchUpdate(token, [
+      {
+        insertDimension: {
+          range: {
+            sheetId: contactsSheetId,
+            dimension: "COLUMNS",
+            startIndex: 0,
+            endIndex: 1,
+          },
+          inheritFromBefore: false,
+        },
+      },
+    ]);
+    await sheetsValuesUpdate(token, tab + "!A1", [[SHEETS_CONFIG.projectIdColName]]);
   }
 
   async function ensureContactsSentHeader(token) {
@@ -1255,6 +1325,7 @@
     const allPhones = extractAllPhones(m.data && m.data.phones);
     const phoneCell = allPhones.length > 0 ? allPhones.join("\n") : String(phonePatternForSheet || "").trim();
     const rowValues = [
+      String(rec.projectId || ""),
       String(m.name || ""),
       String(rec.service || ""),
       String(loc.display || rec.location || ""),
@@ -1276,6 +1347,7 @@
     }
     if (!ctx.sheetInfo) {
       ctx.sheetInfo = await ensureContactsSheet(ctx.token);
+      await ensureContactsProjectIdHeader(ctx.token, ctx.sheetInfo.sheetId);
       await ensureContactsSentHeader(ctx.token);
     }
     await insertContactRowAtTop(ctx.token, ctx.sheetInfo.sheetId, built.rowValues);
