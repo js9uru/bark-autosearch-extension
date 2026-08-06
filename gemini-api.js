@@ -1,19 +1,64 @@
 /**
  * Google Gemini API — generateContent for gemini-3.1-flash-lite.
- * API key: Settings field `apiKey` in chrome.storage.local
+ * API keys: `geminiApiKeys` + `geminiApiKeyIndex` in chrome.storage.local
+ * (legacy single `apiKey` is migrated on read).
  */
 (function (global) {
   const DEFAULT_MODEL = "gemini-3.1-flash-lite";
   const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
   const DEFAULT_TIMEOUT_MS = 120000;
+  const STORAGE_KEYS = {
+    keys: "geminiApiKeys",
+    index: "geminiApiKeyIndex",
+    legacy: "apiKey",
+  };
 
-  function getStoredApiKey() {
+  function storageGetLocal(keys) {
     return new Promise(function (resolve, reject) {
-      chrome.storage.local.get(["apiKey"], function (o) {
+      chrome.storage.local.get(keys, function (o) {
         if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
-        else resolve(String((o && o.apiKey) || "").trim());
+        else resolve(o || {});
       });
     });
+  }
+
+  function storageSetLocal(obj) {
+    return new Promise(function (resolve, reject) {
+      chrome.storage.local.set(obj, function () {
+        if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+        else resolve();
+      });
+    });
+  }
+
+  function normalizeApiKeys(raw) {
+    if (!Array.isArray(raw)) return [];
+    const out = [];
+    const seen = new Set();
+    for (let i = 0; i < raw.length; i++) {
+      const k = String(raw[i] || "").trim();
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      out.push(k);
+    }
+    return out;
+  }
+
+  function isGeminiUsageLimitError(msg) {
+    const s = String(msg || "").toLowerCase();
+    if (!s) return false;
+    return (
+      /429/.test(s) ||
+      /resource_exhausted/.test(s) ||
+      /rate limit/.test(s) ||
+      /quota exceeded/.test(s) ||
+      /exceeded your (current )?quota/.test(s) ||
+      /too many requests/.test(s) ||
+      /generaterequestsperday/.test(s) ||
+      /generaterequestsperminute/.test(s) ||
+      /perdayperproject/.test(s) ||
+      /perminuteperproject/.test(s)
+    );
   }
 
   function normalizeGeminiModel(model) {
@@ -30,6 +75,95 @@
         resolve(normalizeGeminiModel(o && o.nameExtractionModel));
       });
     });
+  }
+
+  async function readKeyPoolState() {
+    const o = await storageGetLocal([STORAGE_KEYS.keys, STORAGE_KEYS.index, STORAGE_KEYS.legacy]);
+    let keys = normalizeApiKeys(o[STORAGE_KEYS.keys]);
+    const legacy = String(o[STORAGE_KEYS.legacy] || "").trim();
+    if (!keys.length && legacy) keys = [legacy];
+    let idx = parseInt(o[STORAGE_KEYS.index], 10);
+    if (!Number.isFinite(idx) || idx < 0) idx = 0;
+    if (keys.length && idx >= keys.length) idx = 0;
+    return { keys: keys, activeIndex: idx, legacyKey: legacy };
+  }
+
+  async function syncLegacyApiKey(keys, activeIndex) {
+    const idx = keys.length ? Math.max(0, Math.min(activeIndex, keys.length - 1)) : 0;
+    const activeKey = keys[idx] || "";
+    await storageSetLocal({
+      [STORAGE_KEYS.keys]: keys,
+      [STORAGE_KEYS.index]: idx,
+      [STORAGE_KEYS.legacy]: activeKey,
+    });
+    return { keys: keys, activeIndex: idx, activeKey: activeKey };
+  }
+
+  async function getStoredApiKeys() {
+    const state = await readKeyPoolState();
+    return state.keys;
+  }
+
+  async function getActiveApiKeyIndex(keys) {
+    const state = await readKeyPoolState();
+    const list = keys || state.keys;
+    if (!list.length) return 0;
+    let idx = state.activeIndex;
+    if (idx < 0 || idx >= list.length) idx = 0;
+    return idx;
+  }
+
+  async function getStoredApiKey() {
+    const state = await readKeyPoolState();
+    if (!state.keys.length) return "";
+    return state.keys[state.activeIndex] || state.keys[0] || "";
+  }
+
+  async function setGeminiApiKeys(keys, activeIndex) {
+    const normalized = normalizeApiKeys(keys);
+    const idx =
+      normalized.length && typeof activeIndex === "number" && Number.isFinite(activeIndex)
+        ? Math.max(0, Math.min(activeIndex, normalized.length - 1))
+        : 0;
+    return syncLegacyApiKey(normalized, idx);
+  }
+
+  async function setActiveApiKeyIndex(index) {
+    const state = await readKeyPoolState();
+    if (!state.keys.length) return state;
+    const idx = Math.max(0, Math.min(index, state.keys.length - 1));
+    return syncLegacyApiKey(state.keys, idx);
+  }
+
+  async function advanceToNextApiKey() {
+    const state = await readKeyPoolState();
+    if (state.keys.length <= 1) {
+      return {
+        advanced: false,
+        exhausted: true,
+        index: state.activeIndex,
+        total: state.keys.length,
+        activeKey: state.keys[state.activeIndex] || "",
+      };
+    }
+    const next = state.activeIndex + 1;
+    if (next >= state.keys.length) {
+      return {
+        advanced: false,
+        exhausted: true,
+        index: state.activeIndex,
+        total: state.keys.length,
+        activeKey: state.keys[state.activeIndex] || "",
+      };
+    }
+    const synced = await syncLegacyApiKey(state.keys, next);
+    return {
+      advanced: true,
+      exhausted: false,
+      index: synced.activeIndex,
+      total: synced.keys.length,
+      activeKey: synced.activeKey,
+    };
   }
 
   function nameExtractionSystemPrompt(firstname) {
@@ -137,6 +271,38 @@
     return text;
   }
 
+  async function generateContentWithKeyRotation(opts) {
+    const options = opts || {};
+    const explicitKey = String(options.apiKey || "").trim();
+    if (explicitKey) {
+      return generateContent(options);
+    }
+
+    const state = await readKeyPoolState();
+    if (!state.keys.length) throw new Error("Gemini API key not set in Settings");
+
+    let startIdx = state.activeIndex;
+    let lastError = null;
+
+    for (let i = startIdx; i < state.keys.length; i++) {
+      try {
+        const text = await generateContent(Object.assign({}, options, { apiKey: state.keys[i] }));
+        if (i !== startIdx) await syncLegacyApiKey(state.keys, i);
+        return text;
+      } catch (e) {
+        lastError = e;
+        const msg = e && e.message ? e.message : String(e);
+        if (isGeminiUsageLimitError(msg) && i < state.keys.length - 1) {
+          await syncLegacyApiKey(state.keys, i + 1);
+          continue;
+        }
+        throw e;
+      }
+    }
+
+    throw lastError || new Error("All Gemini API keys have reached their usage limit");
+  }
+
   function parseJsonFromText(content) {
     let text = String(content || "").trim();
     const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -148,9 +314,6 @@
 
   async function extractNamesFromText(pageText, firstname, opts) {
     const options = opts || {};
-    const apiKey = options.apiKey ? String(options.apiKey).trim() : await getStoredApiKey();
-    if (!apiKey) return { names: [], error: "Gemini API key not set in Settings" };
-
     const model = options.model
       ? normalizeGeminiModel(options.model)
       : await getStoredModel();
@@ -159,8 +322,8 @@
 
     try {
       const content = await Promise.race([
-        generateContent({
-          apiKey: apiKey,
+        generateContentWithKeyRotation({
+          apiKey: options.apiKey,
           model: model,
           systemInstruction: nameExtractionSystemPrompt(firstname),
           userText: pageText,
@@ -186,8 +349,18 @@
 
   global.GeminiApi = {
     DEFAULT_MODEL: DEFAULT_MODEL,
+    STORAGE_KEYS: STORAGE_KEYS,
+    isGeminiUsageLimitError: isGeminiUsageLimitError,
+    normalizeApiKeys: normalizeApiKeys,
+    getStoredApiKeys: getStoredApiKeys,
+    getActiveApiKeyIndex: getActiveApiKeyIndex,
     getStoredApiKey: getStoredApiKey,
+    setGeminiApiKeys: setGeminiApiKeys,
+    setActiveApiKeyIndex: setActiveApiKeyIndex,
+    advanceToNextApiKey: advanceToNextApiKey,
+    readKeyPoolState: readKeyPoolState,
     generateContent: generateContent,
+    generateContentWithKeyRotation: generateContentWithKeyRotation,
     parseJsonFromText: parseJsonFromText,
     extractNamesFromText: extractNamesFromText,
     nameExtractionSystemPrompt: nameExtractionSystemPrompt,

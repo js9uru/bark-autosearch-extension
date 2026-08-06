@@ -295,3 +295,64 @@ textarea {
   margin-left: 20px;
 }
 
+.gemini-api-keys-list {
+  margin-bottom: 8px;
+}
+
+.gemini-api-key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.gemini-api-key-row.in-use input.gemini-api-key-input {
+  border-color: #4285f4;
+  box-shadow: 0 0 0 1px #4285f4;
+}
+
+.gemini-api-key-in-use {
+  font-size: 11px;
+  font-weight: 600;
+  color: #4285f4;
+  white-space: nowrap;
+  flex-shrink: 0;
+  width: 42px;
+}
+
+.gemini-api-key-in-use-spacer {
+  flex-shrink: 0;
+  width: 42px;
+}
+
+.gemini-api-key-row input.gemini-api-key-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.gemini-api-key-remove {
+  width: 32px;
+  min-width: 32px;
+  padding: 8px 0;
+  background-color: #dc3545;
+  color: #fff;
+  line-height: 1;
+  font-size: 18px;
+}
+
+.gemini-api-key-remove:hover {
+  background-color: #c82333;
+}
+
+.btn-add-api-key {
+  width: auto;
+  display: inline-block;
+  padding: 8px 14px;
+  background-color: #34a853;
+  color: #fff;
+}
+
+.btn-add-api-key:hover {
+  background-color: #2d9248;
+}
+

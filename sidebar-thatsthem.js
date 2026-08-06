@@ -207,6 +207,9 @@
   const OUTREACH_SENDER = "Thomas Vadnais";
 
   function isGeminiUsageLimitError(msg) {
+    if (typeof GeminiApi !== "undefined" && GeminiApi.isGeminiUsageLimitError) {
+      return GeminiApi.isGeminiUsageLimitError(msg);
+    }
     const s = String(msg || "").toLowerCase();
     if (!s) return false;
     return (
@@ -219,7 +222,8 @@
       /generaterequestsperday/.test(s) ||
       /generaterequestsperminute/.test(s) ||
       /perdayperproject/.test(s) ||
-      /perminuteperproject/.test(s)
+      /perminuteperproject/.test(s) ||
+      /all gemini api keys have reached/.test(s)
     );
   }
 
@@ -1075,15 +1079,27 @@
   }
 
   async function getGeminiApiKey() {
-    let key = "";
-    try {
-      key = localStorage.getItem("apiKey") || "";
-    } catch (e) {
-      /* ignore */
+    if (typeof GeminiApi !== "undefined" && GeminiApi.getStoredApiKey) {
+      return GeminiApi.getStoredApiKey();
     }
-    if (key.trim()) return key.trim();
-    const o = await storageGet(["apiKey"]);
-    return String(o.apiKey || "").trim();
+    const o = await storageGet(["geminiApiKeys", "geminiApiKeyIndex", "apiKey"]);
+    let keys = Array.isArray(o.geminiApiKeys)
+      ? o.geminiApiKeys.map(function (k) {
+          return String(k || "").trim();
+        }).filter(Boolean)
+      : [];
+    if (!keys.length) {
+      try {
+        keys = [String(localStorage.getItem("apiKey") || "").trim()].filter(Boolean);
+      } catch (e) {
+        /* ignore */
+      }
+    }
+    if (!keys.length && o.apiKey) keys = [String(o.apiKey).trim()];
+    if (!keys.length) return "";
+    let idx = parseInt(o.geminiApiKeyIndex, 10);
+    if (!Number.isFinite(idx) || idx < 0 || idx >= keys.length) idx = 0;
+    return keys[idx] || keys[0] || "";
   }
 
   function normalizeGeminiModel(model) {
@@ -2093,12 +2109,136 @@
     else fn();
   }
 
+  let geminiKeysActiveIndex = 0;
+  let geminiKeysShowPlain = false;
+
+  function collectGeminiApiKeyValuesFromDom() {
+    const listEl = document.getElementById("geminiApiKeysList");
+    if (!listEl) return [];
+    const inputs = listEl.querySelectorAll("input.gemini-api-key-input");
+    const keys = [];
+    inputs.forEach(function (input) {
+      const v = String(input.value || "").trim();
+      if (v) keys.push(v);
+    });
+    return keys;
+  }
+
+  function renderGeminiApiKeysList(keys, activeIndex, showPlain) {
+    const listEl = document.getElementById("geminiApiKeysList");
+    if (!listEl) return;
+    const normalized = keys && keys.length ? keys.slice() : [""];
+    geminiKeysActiveIndex =
+      typeof activeIndex === "number" && activeIndex >= 0 ? activeIndex : 0;
+    if (geminiKeysActiveIndex >= normalized.length) geminiKeysActiveIndex = 0;
+    if (typeof showPlain === "boolean") geminiKeysShowPlain = showPlain;
+
+    listEl.innerHTML = "";
+    for (let i = 0; i < normalized.length; i++) {
+      const row = document.createElement("div");
+      row.className = "gemini-api-key-row" + (i === geminiKeysActiveIndex ? " in-use" : "");
+
+      if (i === geminiKeysActiveIndex) {
+        const badge = document.createElement("span");
+        badge.className = "gemini-api-key-in-use";
+        badge.textContent = "in use";
+        row.appendChild(badge);
+      } else {
+        const spacer = document.createElement("span");
+        spacer.className = "gemini-api-key-in-use-spacer";
+        row.appendChild(spacer);
+      }
+
+      const input = document.createElement("input");
+      input.type = geminiKeysShowPlain ? "text" : "password";
+      input.className = "gemini-api-key-input";
+      input.placeholder = "Paste Gemini API key";
+      input.autocomplete = "off";
+      input.value = normalized[i] || "";
+      row.appendChild(input);
+
+      if (normalized.length > 1) {
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "btn gemini-api-key-remove";
+        removeBtn.title = "Remove this key";
+        removeBtn.textContent = "×";
+        removeBtn.addEventListener("click", function () {
+          const current = collectGeminiApiKeyValuesFromDom();
+          if (current.length <= 1) {
+            renderGeminiApiKeysList([""], 0);
+            return;
+          }
+          current.splice(i, 1);
+          const nextIndex = Math.min(geminiKeysActiveIndex, Math.max(0, current.length - 1));
+          renderGeminiApiKeysList(current, nextIndex);
+        });
+        row.appendChild(removeBtn);
+      }
+
+      listEl.appendChild(row);
+    }
+  }
+
+  async function loadGeminiApiKeysSettingsUi() {
+    let keys = [];
+    let activeIndex = 0;
+    if (typeof GeminiApi !== "undefined" && GeminiApi.readKeyPoolState) {
+      const state = await GeminiApi.readKeyPoolState();
+      keys = state.keys || [];
+      activeIndex = state.activeIndex || 0;
+    } else {
+      const o = await storageGet(["geminiApiKeys", "geminiApiKeyIndex", "apiKey"]);
+      keys = Array.isArray(o.geminiApiKeys)
+        ? o.geminiApiKeys
+            .map(function (k) {
+              return String(k || "").trim();
+            })
+            .filter(Boolean)
+        : [];
+      if (!keys.length && o.apiKey) keys = [String(o.apiKey).trim()];
+      activeIndex = parseInt(o.geminiApiKeyIndex, 10);
+      if (!Number.isFinite(activeIndex) || activeIndex < 0) activeIndex = 0;
+    }
+    if (!keys.length) keys = [""];
+    renderGeminiApiKeysList(keys, activeIndex);
+  }
+
+  async function saveGeminiApiKeysFromSettingsUi(showSettingsSaveStatus) {
+    const keys = collectGeminiApiKeyValuesFromDom();
+    if (!keys.length) {
+      if (showSettingsSaveStatus) {
+        showSettingsSaveStatus("Add at least one Gemini API key.", "error");
+      }
+      return false;
+    }
+    const activeIndex = Math.min(geminiKeysActiveIndex, keys.length - 1);
+    if (typeof GeminiApi !== "undefined" && GeminiApi.setGeminiApiKeys) {
+      await GeminiApi.setGeminiApiKeys(keys, activeIndex);
+    } else {
+      await storageSet({
+        geminiApiKeys: keys,
+        geminiApiKeyIndex: activeIndex,
+        apiKey: keys[activeIndex] || keys[0],
+      });
+    }
+    try {
+      localStorage.setItem("apiKey", keys[activeIndex] || keys[0]);
+    } catch (e) {
+      /* ignore */
+    }
+    renderGeminiApiKeysList(keys, activeIndex);
+    return true;
+  }
+
   ready(function () {
     const sheetsTopNInput = document.getElementById("sheetsTopN");
     const noFoundRescanMaxInput = document.getElementById("noFoundRescanMax");
     const autoSearchIntervalMinutesEl = document.getElementById("autoSearchIntervalMinutes");
     const settingsStatusEl = document.getElementById("settingsStatus");
-    const apiKeyEl = document.getElementById("apiKey");
+    const geminiApiKeysListEl = document.getElementById("geminiApiKeysList");
+    const addGeminiApiKeyBtn = document.getElementById("addGeminiApiKeyBtn");
+    const toggleApiKeyVisibilityBtn = document.getElementById("toggleApiKeyVisibility");
     const saveSettingsBtn = document.getElementById("saveSettings");
     const autoSendEmailOnMatchEl = document.getElementById("autoSendEmailOnMatch");
     const mailRelayUrlEl = document.getElementById("mailRelayUrl");
@@ -2121,25 +2261,29 @@
       if (emailGenerationModelEl) emailGenerationModelEl.disabled = !on;
     }
 
-    if (apiKeyEl) {
-      try {
-        const lsKey = localStorage.getItem("apiKey");
-        if (lsKey) apiKeyEl.value = lsKey;
-      } catch (e) {
-        /* ignore */
-      }
-      storageGet(["apiKey"]).then(function (o) {
-        const key = String(o.apiKey || "").trim();
-        if (key) {
-          apiKeyEl.value = key;
-          try {
-            localStorage.setItem("apiKey", key);
-          } catch (e2) {
-            /* ignore */
-          }
-        } else if (apiKeyEl.value.trim()) {
-          storageSet({ apiKey: apiKeyEl.value.trim() });
-        }
+    if (geminiApiKeysListEl) {
+      loadGeminiApiKeysSettingsUi();
+      chrome.storage.onChanged.addListener(function (changes, area) {
+        if (area !== "local") return;
+        if (!changes.geminiApiKeyIndex && !changes.geminiApiKeys) return;
+        loadGeminiApiKeysSettingsUi();
+      });
+    }
+
+    if (addGeminiApiKeyBtn) {
+      addGeminiApiKeyBtn.addEventListener("click", function () {
+        const current = collectGeminiApiKeyValuesFromDom();
+        current.push("");
+        renderGeminiApiKeysList(current, geminiKeysActiveIndex);
+      });
+    }
+
+    if (toggleApiKeyVisibilityBtn) {
+      toggleApiKeyVisibilityBtn.addEventListener("click", function () {
+        geminiKeysShowPlain = !geminiKeysShowPlain;
+        const current = collectGeminiApiKeyValuesFromDom();
+        if (!current.length) current.push("");
+        renderGeminiApiKeysList(current, geminiKeysActiveIndex, geminiKeysShowPlain);
       });
     }
 
@@ -2223,15 +2367,8 @@
 
     if (saveSettingsBtn) {
       saveSettingsBtn.addEventListener("click", async function () {
-        const key = apiKeyEl ? apiKeyEl.value.trim() : "";
-        if (key) {
-          try {
-            localStorage.setItem("apiKey", key);
-          } catch (e) {
-            /* ignore */
-          }
-          await storageSet({ apiKey: key });
-        }
+        const keysSaved = await saveGeminiApiKeysFromSettingsUi(showSettingsSaveStatus);
+        if (!keysSaved) return;
 
         if (sheetsTopNInput) {
           const raw = sheetsTopNInput.value.trim();
@@ -2886,9 +3023,9 @@
         const detailStr = detail ? String(detail).trim() : "";
         showStatus(
           statusEl,
-          "Auto Search stopped: Gemini API usage limit reached." +
+          "Auto Search stopped: all Gemini API keys have reached their usage limit." +
             (detailStr ? "\n\n" + detailStr : "") +
-            "\n\nWait and try again later (daily quota resets midnight Pacific Time).",
+            "\n\nAdd another key in Settings or wait and try again later (daily quota resets midnight Pacific Time).",
           "error"
         );
         try {
@@ -2896,7 +3033,7 @@
             type: "basic",
             iconUrl: chrome.runtime.getURL("icon.png"),
             title: "Auto Search stopped",
-            message: "Gemini API usage limit reached. Auto Search has been stopped.",
+            message: "All Gemini API keys have reached their usage limit.",
             priority: 2,
           });
         } catch (e) {

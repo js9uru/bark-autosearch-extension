@@ -2,10 +2,10 @@
 importScripts("gemini-api.js");
 
 async function handleGeminiExtractNames(msg) {
-  const apiKey = String((msg && msg.apiKey) || "").trim() || (await GeminiApi.getStoredApiKey());
+  const explicitKey = String((msg && msg.apiKey) || "").trim();
   return GeminiApi.extractNamesFromText(msg.pageText, msg.firstname, {
     model: msg.model,
-    apiKey: apiKey,
+    apiKey: explicitKey || undefined,
   });
 }
 
@@ -43,10 +43,9 @@ chrome.runtime.onMessage.addListener(function (msg, _sender, sendResponse) {
   if (msg.action === "geminiGenerateContent") {
     (async function () {
       try {
-        const apiKey =
-          String((msg && msg.apiKey) || "").trim() || (await GeminiApi.getStoredApiKey());
-        const text = await GeminiApi.generateContent({
-          apiKey: apiKey,
+        const explicitKey = String((msg && msg.apiKey) || "").trim();
+        const text = await GeminiApi.generateContentWithKeyRotation({
+          apiKey: explicitKey || undefined,
           model: msg.model,
           systemInstruction: msg.systemInstruction,
           userText: msg.userText,

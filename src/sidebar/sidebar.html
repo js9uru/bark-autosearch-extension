@@ -5,6 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Search Extractor</title>
+  <script defer src="/gemini-api.js"></script>
   <script type="module" crossorigin src="/sidebar.js"></script>
   <script defer src="/email-pattern-match.js"></script>
   <script defer src="/phone-pattern-match.js"></script>
@@ -179,15 +180,16 @@
         <h2>Settings</h2>
 
         <div class="form-group">
-          <label for="apiKey">Google Gemini API Key:</label>
-          <input type="password" id="apiKey" placeholder="Paste your Gemini API key" autocomplete="off">
-          <small class="form-hint">From <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>. Stored locally in your browser.</small>
+          <label>Google Gemini API Keys:</label>
+          <div id="geminiApiKeysList" class="gemini-api-keys-list"></div>
+          <button type="button" id="addGeminiApiKeyBtn" class="btn btn-add-api-key" title="Add another API key">+ Add API Key</button>
+          <small class="form-hint">From <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio</a>. Stored locally. When one key hits its limit, the extension switches to the next key automatically.</small>
         </div>
 
         <div class="form-group">
           <button type="button" id="toggleApiKeyVisibility" class="btn"
             style="margin-top: 8px; background-color: #6c757d; color: white;">
-            Show / Hide API Key
+            Show / Hide API Keys
           </button>
         </div>
 
@@ -241,7 +243,7 @@
         <div class="form-group">
           <label for="emailGenerationModel">Email generation model:</label>
           <input type="text" id="emailGenerationModel" placeholder="gemini-3.1-flash-lite" autocomplete="off" disabled>
-          <small class="form-hint">Gemini model for auto-send email body (uses your Settings API key).</small>
+          <small class="form-hint">Gemini model for auto-send email body (uses your active Settings API key).</small>
         </div>
 
         <div class="form-group" style="margin-top: 8px;">
