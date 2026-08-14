@@ -5,6 +5,7 @@
   "description": "Extract data from search results and process them",
   "permissions": [
     "activeTab",
+    "debugger",
     "notifications",
     "sidePanel",
     "scripting",
