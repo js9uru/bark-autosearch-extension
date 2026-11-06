@@ -21,6 +21,38 @@
     return decodeXHrefMeta(b64).email;
   }
 
+  function buildGoUrl(token) {
+    const raw = String(token || "").trim();
+    if (!raw) return "";
+    if (/^https?:/i.test(raw)) return raw;
+    if (raw.charAt(0) === "/") return location.origin + raw;
+    let p = "";
+    try {
+      p = btoa(location.pathname || "/")
+        .split("+")
+        .join("-")
+        .split("/")
+        .join("_")
+        .replace(/=+$/, "");
+    } catch (err) {
+      return "";
+    }
+    return location.origin + "/go/" + raw + "." + p;
+  }
+
+  function goTokenFrom(root) {
+    if (!root || !root.getAttribute) return "";
+    const own = root.getAttribute("x-href.go");
+    if (own) return String(own).trim();
+    if (!root.querySelectorAll) return "";
+    const all = root.querySelectorAll("[x-href\\.go]");
+    for (let i = 0; i < all.length; i++) {
+      const v = all[i].getAttribute("x-href.go");
+      if (v) return String(v).trim();
+    }
+    return "";
+  }
+
   function parseRedactedLi(li) {
     const red = li.querySelector('.redacted,span.redacted,[class*="redacted"]');
     if (!red) return null;
@@ -58,13 +90,16 @@
       .slice(ati + 1)
       .replace(/\s+/g, "")
       .replace(/[^a-z0-9.-]/gi, "");
-    return { redacted: true, prefix, suffix, redactedLen: redLen, domain };
+    const goUrl = buildGoUrl(goTokenFrom(container));
+    const out = { redacted: true, prefix, suffix, redactedLen: redLen, domain };
+    if (goUrl) out.goUrl = goUrl;
+    return out;
   }
 
   function findXHrefHost(fromEl) {
     let n = fromEl;
     for (let i = 0; i < 6 && n; i++, n = n.parentElement) {
-      if (n.getAttribute && n.getAttribute("x-href")) return n;
+      if (n.getAttribute && (n.getAttribute("x-href.go") || n.getAttribute("x-href"))) return n;
     }
     return null;
   }
@@ -101,16 +136,21 @@
     }
     suffix = suffix.replace(/\s+/g, "");
     let hrefPhone = "";
+    const goUrl = buildGoUrl(container.getAttribute("x-href.go"));
     try {
       const raw = container.getAttribute("x-href");
-      const path = atob(String(raw || "").trim());
-      if (/@[\w.-]+\.[a-z]{2,}/i.test(path)) return null;
-      const pm = path.match(/\/phone\/([\d-]+)/i);
-      if (pm) hrefPhone = pm[1];
+      if (raw) {
+        const path = atob(String(raw || "").trim());
+        if (/@[\w.-]+\.[a-z]{2,}/i.test(path)) return null;
+        const pm = path.match(/\/phone\/([\d-]+)/i);
+        if (pm) hrefPhone = pm[1];
+      }
     } catch (err) {
       /* ignore */
     }
-    return { redacted: true, prefix, suffix, redactedLen: redLen, hrefPhone };
+    const out = { redacted: true, prefix, suffix, redactedLen: redLen, hrefPhone };
+    if (goUrl) out.goUrl = goUrl;
+    return out;
   }
 
   function formatUs10FromDigits(digits) {
@@ -189,6 +229,17 @@
         if (meta.path && !meta.email) o.xHrefDecoded = meta.path;
         addEmail(o);
       } else {
+        const goUrl = buildGoUrl(goTokenFrom(li));
+        if (goUrl) {
+          addEmail({
+            redacted: true,
+            prefix: "",
+            suffix: "",
+            redactedLen: 0,
+            domain: "",
+            goUrl: goUrl,
+          });
+        }
         li.querySelectorAll("[x-href]").forEach((xel) => {
           const e = decodeXHref(xel.getAttribute("x-href"));
           if (e) addEmail(e);
@@ -223,6 +274,11 @@
       }
       const hasRed = li.querySelector('.redacted,span.redacted,[class*="redacted"]');
       if (hasRed) return;
+      const goUrl = buildGoUrl(goTokenFrom(li));
+      if (goUrl) {
+        addPhone({ redacted: true, prefix: "", suffix: "", redactedLen: 0, hrefPhone: "", goUrl: goUrl });
+        return;
+      }
       li.querySelectorAll("[x-href]").forEach((el) => {
         const ph = decodePhoneFromXHref(el.getAttribute("x-href"));
         if (ph) addPhone(ph);

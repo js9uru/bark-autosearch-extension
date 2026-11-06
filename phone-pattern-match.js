@@ -3,7 +3,10 @@
  * Punctuation/spacing in the pattern is ignored for matching; the value is reduced to 10 digits.
  * If the pattern does not resolve to exactly 10 digit/* positions, falls back to
  * character-by-character match on whitespace-normalized strings (legacy).
- * Redacted rows: { redacted, hrefPhone? } — hrefPhone is matched as a normal phone string.
+ * Redacted rows: { redacted, prefix, suffix, redactedLen, hrefPhone? }.
+ * hrefPhone is matched as a normal phone. Otherwise visible digits are checked
+ * and each hidden character is one unknown digit, so "(419) ***-****" can
+ * reject "818-434-" + 4 hidden digits without opening the row.
  */
 (function (global) {
   function normalizeSpaces(s) {
@@ -69,11 +72,54 @@
     return wildcardEqual(pn, vn);
   }
 
+  function visiblePhoneDigitMask(o) {
+    const prefix = String((o && o.prefix) || "");
+    const suffix = String((o && o.suffix) || "");
+    const redLen = Number(o && o.redactedLen);
+    if (!Number.isFinite(redLen) || redLen < 0) return "";
+    let mask = "";
+    for (let i = 0; i < prefix.length; i++) {
+      if (/\d/.test(prefix[i])) mask += prefix[i];
+    }
+    for (let i = 0; i < redLen; i++) mask += "*";
+    for (let i = 0; i < suffix.length; i++) {
+      if (/\d/.test(suffix[i])) mask += suffix[i];
+    }
+    if (mask.length === 11 && mask[0] === "1") mask = mask.slice(1);
+    return mask;
+  }
+
+  function matchDigitMasksKnown(patternMask, valueMask) {
+    if (!patternMask || !valueMask || patternMask.length !== valueMask.length) return false;
+    for (let i = 0; i < patternMask.length; i++) {
+      const p = patternMask[i];
+      const v = valueMask[i];
+      if (p === "*" || v === "*") continue;
+      if (p !== v) return false;
+    }
+    return true;
+  }
+
+  function matchPhoneVisibleRedacted(pattern, o) {
+    const patternMask = patternToDigitMask(pattern);
+    const valueMask = visiblePhoneDigitMask(o);
+    if (patternMask.length === 10) {
+      if (valueMask.length !== 10) return false;
+      return matchDigitMasksKnown(patternMask, valueMask);
+    }
+    const redLen = Number(o && o.redactedLen);
+    const shown =
+      String((o && o.prefix) || "") +
+      "*".repeat(Number.isFinite(redLen) && redLen > 0 ? redLen : 0) +
+      String((o && o.suffix) || "");
+    return wildcardEqual(normalizeSpaces(pattern), normalizeSpaces(shown));
+  }
+
   function matchPhoneRedactedRow(pattern, o) {
     if (!pattern || !o || o.redacted !== true) return false;
     const href = o.hrefPhone != null ? String(o.hrefPhone).trim() : "";
     if (href) return matchPhonePattern(pattern, href);
-    return false;
+    return matchPhoneVisibleRedacted(pattern, o);
   }
 
   function rowMatchesPhone(pattern, row) {
@@ -112,6 +158,7 @@
     patternToDigitMask: patternToDigitMask,
     digitsOnly10: digitsOnly10,
     matchPhoneRedactedRow: matchPhoneRedactedRow,
+    matchPhoneVisibleRedacted: matchPhoneVisibleRedacted,
     rowMatchesPhone: rowMatchesPhone,
     filterPhoneRows: filterPhoneRows,
     filterPhones: filterPhones,

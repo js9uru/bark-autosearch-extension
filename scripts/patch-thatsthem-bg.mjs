@@ -38,7 +38,7 @@ const block =
   captchaLoop +
   'await new Promise(a=>{let w=0;const o=setInterval(()=>{chrome.scripting.executeScript({target:{tabId:t.id},func:()=>{if(document.readyState!=="complete")return!1;const b=document.body;if(!b||!b.innerText)return!1;const h=document.querySelector("h1");return!!(h&&/results\\s+for/i.test(h.textContent||""))&&(b.innerText.includes("@")||/\\d[\\d\\s().*\\-]{8,}/.test(b.innerText))}},n=>{if(n&&n[0]&&n[0].result){clearInterval(o);a();return}if(++w>70){clearInterval(o);a()}})},200)});await new Promise(P=>setTimeout(P,900));chrome.scripting.executeScript({target:{tabId:t.id},func:' +
   scrapeInner +
-  "},a=>{a&&a[0]?c({data:a[0].result}):c({data:[]})})});return true}";
+  "},async a=>{let data=a&&a[0]?a[0].result:null;try{if(data)data=await ttResolveGo(data,r.emailPattern,r.phonePattern)}catch(err){}c({data:data||[]})})});return true}";
 
 if (bg.includes("fetchPageDataThatsThem")) {
   const start = 'if(r.action==="fetchPageDataThatsThem"){';

@@ -64,4 +64,5 @@ chrome.runtime.onMessage.addListener(function (msg, _sender, sendResponse) {
   }
 });
 
+importScripts("thatsthem-go-resolve.js");
 importScripts("background.js");

@@ -2532,7 +2532,15 @@
 
           try {
             const res = await new Promise(function (resolve) {
-              chrome.runtime.sendMessage({ action: "fetchPageDataThatsThem", url: url }, resolve);
+              chrome.runtime.sendMessage(
+                {
+                  action: "fetchPageDataThatsThem",
+                  url: url,
+                  emailPattern: emailPattern,
+                  phonePattern: phonePattern,
+                },
+                resolve
+              );
             });
             const raw = (res && res.data) || null;
             const m = computeThatsThemMatches(raw, emailPattern, phonePattern);
